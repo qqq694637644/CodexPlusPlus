@@ -328,6 +328,30 @@ async fn core_runtime_reload_evaluates_enabled_user_bundle_and_status_is_ok() {
     assert!(evaluated[0].contains("window.demo = true;"));
 }
 
+#[tokio::test]
+async fn core_runtime_open_devtools_uses_inspector_url_opener() {
+    let opened = Arc::new(Mutex::new(Vec::<String>::new()));
+    let runtime = CoreRuntimeService::new(9229, StatusStore::default())
+        .with_devtools_opener({
+            let opened = opened.clone();
+            Arc::new(move |url| {
+                opened.lock().unwrap().push(url.to_string());
+                Ok(())
+            })
+        })
+        .with_devtools_target_id("page-1");
+    let ctx = BridgeContext::core_with_data(Arc::new(runtime), Arc::new(FakeData::default()));
+
+    let result = handle_bridge_request(ctx, "/devtools/open", json!({})).await;
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["target_id"], "page-1");
+    assert_eq!(
+        opened.lock().unwrap().as_slice(),
+        ["http://127.0.0.1:9229/devtools/inspector.html?ws=127.0.0.1:9229/devtools/page/page-1"]
+    );
+}
+
 #[test]
 fn user_script_manager_tolerates_bad_config_fields_and_updates_atomically() {
     let temp = tempfile::tempdir().unwrap();

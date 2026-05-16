@@ -256,9 +256,15 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     }
 
     async fn open_devtools(&self) -> anyhow::Result<Value> {
+        let debug_port = *self.debug_port.lock().unwrap();
+        let targets = codex_plus_core::cdp::list_targets(debug_port).await?;
+        let target = codex_plus_core::cdp::pick_page_target(&targets)?;
+        let url = codex_plus_core::routes::devtools_url(debug_port, &target.id);
+        open_url(&url)?;
         Ok(json!({
             "status": "ok",
-            "debug_port": *self.debug_port.lock().unwrap()
+            "target_id": target.id,
+            "url": url
         }))
     }
 
@@ -318,6 +324,41 @@ fn default_codex_db_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".codex")
         .join("state_5.sqlite")
+}
+
+fn open_url(url: &str) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| anyhow::anyhow!("failed to open DevTools URL: {error}"))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| anyhow::anyhow!("failed to open DevTools URL: {error}"))
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| anyhow::anyhow!("failed to open DevTools URL: {error}"))
+    }
+
+    #[cfg(not(any(windows, target_os = "macos", unix)))]
+    {
+        let _ = url;
+        anyhow::bail!("opening DevTools URL is not supported on this platform")
+    }
 }
 
 fn default_user_script_manager() -> UserScriptManager {

@@ -9,6 +9,7 @@ use crate::status::StatusStore;
 use crate::user_scripts::UserScriptManager;
 
 pub type UserScriptEvaluator = Arc<dyn Fn(&str, &str) -> anyhow::Result<Value> + Send + Sync>;
+pub type DevtoolsOpener = Arc<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct BridgeContext {
@@ -188,6 +189,8 @@ pub struct CoreRuntimeService {
     user_scripts: Option<UserScriptManager>,
     websocket_url: Option<String>,
     user_script_evaluator: Option<UserScriptEvaluator>,
+    devtools_opener: Option<DevtoolsOpener>,
+    devtools_target_id: Option<String>,
 }
 
 impl CoreRuntimeService {
@@ -198,6 +201,8 @@ impl CoreRuntimeService {
             user_scripts: None,
             websocket_url: None,
             user_script_evaluator: None,
+            devtools_opener: None,
+            devtools_target_id: None,
         }
     }
 
@@ -213,6 +218,16 @@ impl CoreRuntimeService {
 
     pub fn with_user_script_evaluator(mut self, evaluator: UserScriptEvaluator) -> Self {
         self.user_script_evaluator = Some(evaluator);
+        self
+    }
+
+    pub fn with_devtools_opener(mut self, opener: DevtoolsOpener) -> Self {
+        self.devtools_opener = Some(opener);
+        self
+    }
+
+    pub fn with_devtools_target_id(mut self, target_id: impl Into<String>) -> Self {
+        self.devtools_target_id = Some(target_id.into());
         self
     }
 }
@@ -265,9 +280,18 @@ impl BridgeRuntimeService for CoreRuntimeService {
     }
 
     async fn open_devtools(&self) -> anyhow::Result<Value> {
+        let target_id = self
+            .devtools_target_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("No DevTools target configured"))?;
+        let url = devtools_url(self.debug_port, target_id);
+        if let Some(opener) = &self.devtools_opener {
+            opener(&url)?;
+        }
         Ok(json!({
             "status": "ok",
-            "debug_port": self.debug_port
+            "target_id": target_id,
+            "url": url
         }))
     }
 
@@ -422,6 +446,12 @@ fn sessions_from_payload(payload: &Value) -> Vec<SessionRef> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+pub fn devtools_url(debug_port: u16, target_id: &str) -> String {
+    format!(
+        "http://127.0.0.1:{debug_port}/devtools/inspector.html?ws=127.0.0.1:{debug_port}/devtools/page/{target_id}"
+    )
 }
 
 fn empty_user_script_inventory() -> Value {
