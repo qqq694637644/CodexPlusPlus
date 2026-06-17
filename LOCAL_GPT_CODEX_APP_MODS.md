@@ -297,7 +297,55 @@ app://-/assets/vscode-api-D4QUNFB4.js#d.getInstance()
 
 - `thread-prewarm-start` 和 `mcp-request turn/start` 是否可以安全改写 `cwd`。
 - 改写 `cwd` 后 Codex native 是否真的在新 workspace 中执行。
-- 如果 dispatcher 层不能异步等待 bootstrap，则需要改在 DOM Enter capture 阶段拦截。
+- 如果 dispatcher 层不能在调用原始 dispatcher 前阻塞等待 bootstrap，则需要改在 DOM Enter capture 阶段拦截。
+
+补充探测：dispatcher 层阻塞式等待可行。
+
+探测文件：
+
+```text
+scripts/probe_codex_async_cwd_rewrite.py
+_dump/localgpt-async-cwd-rewrite-probe.json
+```
+
+探测方式：
+
+- 将 `dispatcher.dispatchMessage` 改成 `async` wrapper，但不先调用原始 dispatcher。
+- 对 `thread-prewarm-start` 和 `mcp-request turn/start` 人为等待 1500ms。
+- 等待后再改写 `cwd` 并调用原始 dispatcher。
+- 这是“await 后再放行”，不是“先放行，后台异步后补”。
+
+实测记录：
+
+```text
+thread-prewarm-start:
+  before-delay 1500ms
+  rewrite cwd -> D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+
+mcp-request turn/start:
+  before-delay 1500ms
+  rewrite cwd -> D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+```
+
+Codex App 返回验证：
+
+```text
+当前工作目录是：
+D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+LOCALGPT_PROBE_AGENTS_LOADED
+```
+
+结论：
+
+> 可以在 dispatcher 层阻塞式等待 LocalGPT bootstrap。  
+> 因此第一版不必做 DOM Enter capture 阻断。  
+> 推荐实现路径：dispatcher patch 捕获 `thread-prewarm-start`，读取原始 `cwd` 和输入任务，调用 `/localgpt/bootstrap-project`，拿到 `workspace_path` 后改写本次 `thread/start` 与后续 `turn/start` 的 `cwd`。
+
+注意：
+
+> 不能做后台异步后补。  
+> 必须在调用原始 `dispatchMessage` 之前完成 bootstrap 和 `cwd` 改写。  
+> 一旦原始 `thread/start` / `turn/start` 已经用旧 `cwd` 放行，`AGENTS.md` 和 `.agents\skills` 的加载时机就已经错过。
 
 目标：
 
@@ -327,6 +375,56 @@ app://-/assets/vscode-api-D4QUNFB4.js#d.getInstance()
 ---
 
 ### 第 2 步：探测如何打开指定 workspace
+
+状态：已完成第一轮探测，dispatcher 层改写 `cwd` 可行。
+
+探测文件：
+
+```text
+scripts/probe_codex_cwd_rewrite.py
+_dump/localgpt-cwd-rewrite-probe.json
+```
+
+探测 workspace：
+
+```text
+D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+```
+
+探测方式：
+
+- 注入 dispatcher patch。
+- 在一次发送窗口内改写：
+  - `thread-prewarm-start` / `thread/start` 的 `params.cwd`
+  - `mcp-request` / `turn/start` 的 `params.cwd`
+  - `generate-thread-title` fetch body 的 `cwd`
+
+实测改写记录：
+
+```text
+thread-prewarm-start:
+  original cwd = D:\repos\CodexPlusPlus
+  next cwd     = D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+
+mcp-request turn/start:
+  params.cwd   = D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+```
+
+Codex App 返回验证：
+
+```text
+当前工作目录是：
+D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+
+已读取到 AGENTS.md，并确认其中的探测说明。
+LOCALGPT_PROBE_AGENTS_LOADED
+```
+
+结论：
+
+> 不需要找“打开 workspace”的独立 UI 能力。  
+> 当前更简单的实现路径是：用户按 Enter 后，在 dispatcher 层拦截并改写 `thread/start` / `turn/start` 的 `cwd`。  
+> 只要 `cwd` 指向 LocalGPT 创建的随机 workspace，Codex native 就会在该 workspace 中执行，并加载 workspace 根目录的 `AGENTS.md`。
 
 目标：
 
@@ -359,6 +457,39 @@ app://-/assets/vscode-api-D4QUNFB4.js#d.getInstance()
 ---
 
 ### 第 4 步：探测 `.agents\skills` 是否被加载
+
+状态：已完成第一轮探测，`.agents\skills` 可被加载。
+
+探测文件：
+
+```text
+_dump/localgpt-skill-probe.json
+```
+
+探测 workspace：
+
+```text
+D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+```
+
+workspace 内 skill：
+
+```text
+.agents\skills\localgpt-probe\SKILL.md
+```
+
+Codex App 返回验证：
+
+```text
+已加载 localgpt-probe skill。
+LOCALGPT_PROBE_AGENTS_LOADED
+LOCALGPT_PROBE_SKILL_LOADED
+```
+
+结论：
+
+> dispatcher 层改写 `cwd` 后，Codex 会加载目标 workspace 下的 `AGENTS.md` 和 `.agents\skills`。  
+> LocalGPT 设计中的 workspace 结构成立。
 
 目标：
 
