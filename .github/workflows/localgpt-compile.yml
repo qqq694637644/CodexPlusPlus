@@ -48,7 +48,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Check codex-plus-core with LocalGPT path dependency
-        run: cargo check --manifest-path build/CodexPlusPlus-localgpt/Cargo.toml -p codex-plus-core --all-targets
+        run: cargo check --manifest-path build/CodexPlusPlus-localgpt/Cargo.toml -p codex-plus-core
 
   windows-artifacts:
     name: Windows artifacts

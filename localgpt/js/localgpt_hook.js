@@ -1,5 +1,5 @@
 (() => {
-  const HOOK_VERSION = "5";
+  const HOOK_VERSION = "6";
   const REQUEST_MIDDLEWARE_NAME = "localgpt-request";
   const INBOUND_MIDDLEWARE_NAME = "localgpt-inbound";
   const requestIdToWorkspaceId = new Map();

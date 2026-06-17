@@ -352,7 +352,7 @@ Fail Fast 规则：
 python -m venv {workspace}\.venv
 ```
 
-必须在 rename 到最终 workspace 之后再执行，不能在临时目录创建 venv 后移动。不要自动搜索多个 Python，不要兜底兼容。找不到 `python` 就 fail fast。venv 创建失败时整个 `prepare-thread-start` 失败，不写入 `localgpt-state.json`。
+必须在 rename 到最终 workspace 之后再执行，不能在临时目录创建 venv 后移动。不要自动搜索多个 Python，不要兜底兼容。找不到 `python` 就 fail fast。venv 创建或最终校验失败时整个 `prepare-thread-start` 失败，不写入 `localgpt-state.json`，并删除刚创建的最终 workspace，避免留下半成品目录。
 
 ### 6.6 `state.rs`
 
@@ -473,13 +473,11 @@ localgpt-state.json.tmp -> localgpt-state.json
 
 ```json
 {
-  "status": "ok",
-  "threadId": "019ed5af-d10d-7c12-b3c7-cd81b7b1ea44",
-  "workspaceId": "localgpt-8be71464-be84-49c9-a166-37458d61a674"
+  "status": "ok"
 }
 ```
 
-如果同一个 `threadId` 已经绑定到不同 `workspaceId`，直接 fail fast。  
+如果同一个 `threadId` 已经绑定到不同 `workspaceId`，直接 fail fast。
 如果同一个 `threadId` 重复绑定到相同 `workspaceId`，可以返回 ok，保持幂等。
 
 ### 7.3 `/localgpt/prepare-turn-start`
@@ -878,7 +876,7 @@ threadId 未绑定
 cwd == D:\repos\CodexPlusPlus
 ```
 
-必须 fail fast。  
+必须 fail fast。
 不要偷偷创建 workspace。
 
 ## 14. 最终实现边界

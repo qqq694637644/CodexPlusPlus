@@ -44,8 +44,9 @@ pub fn bootstrap_new_workspace(workspace_id: &str) -> Result<WorkspaceInfo> {
     }
 
     bootstrap_workspace_skeleton_transactionally(&workspace)?;
-    create_python_venv(&venv)?;
-    validate_existing_workspace(&workspace)?;
+    if let Err(error) = create_python_venv(&venv).and_then(|_| validate_existing_workspace(&workspace)) {
+        rollback_workspace_after_failed_venv(&workspace, error)?;
+    }
 
     Ok(WorkspaceInfo {
         workspace_id: workspace_id.to_string(),
@@ -115,6 +116,22 @@ fn create_python_venv(venv_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn rollback_workspace_after_failed_venv(workspace: &Path, original_error: anyhow::Error) -> Result<()> {
+    match fs::remove_dir_all(workspace) {
+        Ok(()) => Err(anyhow::anyhow!(
+            "LocalGPT workspace 初始化失败，已回滚最终目录：{}；原因：{:#}",
+            workspace.display(),
+            original_error
+        )),
+        Err(rollback_error) => Err(anyhow::anyhow!(
+            "LocalGPT workspace 初始化失败，且回滚最终目录失败：{}；原因：{:#}；回滚错误：{}",
+            workspace.display(),
+            original_error,
+            rollback_error
+        )),
+    }
 }
 
 pub fn validate_existing_workspace(workspace: &Path) -> Result<()> {
