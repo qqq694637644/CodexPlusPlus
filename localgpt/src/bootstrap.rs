@@ -2,32 +2,27 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use serde_json::json;
 
-use crate::log;
 use crate::paths;
 use crate::templates;
 
-pub fn ensure_workspace() -> Result<std::path::PathBuf> {
-    let workspace = paths::workspace_path();
+pub fn ensure_workspace(thread_id: &str) -> Result<std::path::PathBuf> {
+    let workspace = paths::workspace_path(thread_id)?;
     let source_root = paths::source_cwd();
-    if paths::same_path(&workspace, &source_root) {
+    if workspace.exists() && paths::same_path(&workspace, &source_root)? {
         bail!("workspace 不能等于源目录：{}", workspace.display());
     }
-
-    log::append(
-        "bootstrap.start",
-        json!({
-            "workspace": paths::display_path(&workspace),
-            "source_root": paths::display_path(&source_root),
-        }),
-    );
-
-    fs::create_dir_all(&workspace)
-        .with_context(|| format!("创建 workspace 目录失败：{}", workspace.display()))?;
-    if !workspace.is_dir() {
-        bail!("workspace 不是目录：{}", workspace.display());
+    if workspace.exists() {
+        validate_existing_workspace(&workspace)?;
+        return Ok(workspace);
     }
+    bootstrap_new_workspace(&workspace)?;
+    Ok(workspace)
+}
+
+fn bootstrap_new_workspace(workspace: &Path) -> Result<()> {
+    fs::create_dir_all(workspace)
+        .with_context(|| format!("创建 workspace 目录失败：{}", workspace.display()))?;
 
     let agents_path = workspace.join("AGENTS.md");
     let agents_content = templates::agents_template();
@@ -41,27 +36,27 @@ pub fn ensure_workspace() -> Result<std::path::PathBuf> {
     let skills_target = workspace.join(".agents").join("skills");
     let copied_files = copy_dir_recursive(&skills_source, &skills_target)?;
 
-    if !agents_path.is_file() {
-        bail!("AGENTS.md 未成功生成：{}", agents_path.display());
-    }
-    if !skills_target.is_dir() {
-        bail!("skills 目录未成功生成：{}", skills_target.display());
-    }
+    validate_existing_workspace(workspace)?;
     if copied_files == 0 {
         bail!("skills 模板目录没有复制任何文件：{}", skills_source.display());
     }
 
-    log::append(
-        "bootstrap.ok",
-        json!({
-            "workspace": paths::display_path(&workspace),
-            "agents_path": paths::display_path(&agents_path),
-            "skills_path": paths::display_path(&skills_target),
-            "copied_files": copied_files,
-        }),
-    );
+    Ok(())
+}
 
-    Ok(workspace)
+fn validate_existing_workspace(workspace: &Path) -> Result<()> {
+    if !workspace.is_dir() {
+        bail!("workspace 不是目录：{}", workspace.display());
+    }
+    let agents_path = workspace.join("AGENTS.md");
+    let skills_target = workspace.join(".agents").join("skills");
+    if !agents_path.is_file() {
+        bail!("workspace 缺少 AGENTS.md：{}", agents_path.display());
+    }
+    if !skills_target.is_dir() {
+        bail!("workspace 缺少 skills 目录：{}", skills_target.display());
+    }
+    Ok(())
 }
 
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<usize> {

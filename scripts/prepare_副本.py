@@ -86,6 +86,39 @@ def patch_cargo_toml() -> None:
     replace_exact_once(path, old, new)
 
 
+def patch_cargo_lock() -> None:
+    path = BUILD_ROOT / "Cargo.lock"
+    dependency_old = (
+        ' "futures-util",\n'
+        ' "reqwest 0.12.28",\n'
+    )
+    dependency_new = (
+        ' "futures-util",\n'
+        ' "localgpt",\n'
+        ' "reqwest 0.12.28",\n'
+    )
+    replace_exact_once(path, dependency_old, dependency_new)
+
+    package_old = (
+        "[[package]]\n"
+        "name = \"codex-plus-data\"\n"
+    )
+    package_new = (
+        "[[package]]\n"
+        "name = \"localgpt\"\n"
+        "version = \"0.1.0\"\n"
+        "dependencies = [\n"
+        " \"anyhow\",\n"
+        " \"serde\",\n"
+        " \"serde_json\",\n"
+        "]\n"
+        "\n"
+        "[[package]]\n"
+        "name = \"codex-plus-data\"\n"
+    )
+    replace_exact_once(path, package_old, package_new)
+
+
 def patch_routes_rs() -> None:
     path = BUILD_ROOT / "crates" / "codex-plus-core" / "src" / "routes.rs"
     old = (
@@ -98,6 +131,60 @@ def patch_routes_rs() -> None:
         '        "/delete" => result_value(ctx.data.delete(session_from_payload(&payload)).await),\n'
     )
     replace_exact_once(path, old, new)
+
+
+def patch_renderer_inject_js() -> None:
+    path = BUILD_ROOT / "assets" / "inject" / "renderer-inject.js"
+    install_anchor = "  function installCodexServiceTierDispatcherPatch() {\n"
+    middleware_code = (
+        "  function registerCodexPlusDispatchMiddleware(name, handler) {\n"
+        "    if (!name || typeof handler !== \"function\") throw new Error(\"Invalid dispatch middleware\");\n"
+        "    const middlewares = Array.isArray(window.__codexPlusDispatchMiddlewares) ? window.__codexPlusDispatchMiddlewares : [];\n"
+        "    if (middlewares.some((middleware) => middleware.name === name)) throw new Error(`Dispatch middleware already registered: ${name}`);\n"
+        "    middlewares.push({ name, handler });\n"
+        "    window.__codexPlusDispatchMiddlewares = middlewares;\n"
+        "  }\n"
+        "\n"
+        "  function runCodexPlusDispatchMiddlewares(message, finalDispatch) {\n"
+        "    const middlewares = Array.isArray(window.__codexPlusDispatchMiddlewares) ? window.__codexPlusDispatchMiddlewares : [];\n"
+        "    const runAt = (index, currentMessage) => {\n"
+        "      if (!currentMessage || typeof currentMessage !== \"object\") throw new Error(\"Dispatch middleware returned invalid message\");\n"
+        "      if (index >= middlewares.length) return finalDispatch(currentMessage);\n"
+        "      const nextMessage = middlewares[index].handler(currentMessage);\n"
+        "      if (nextMessage && typeof nextMessage.then === \"function\") {\n"
+        "        return nextMessage.then((resolvedMessage) => runAt(index + 1, resolvedMessage));\n"
+        "      }\n"
+        "      return runAt(index + 1, nextMessage);\n"
+        "    };\n"
+        "    return runAt(0, message);\n"
+        "  }\n"
+        "\n"
+        "  window.__codexPlusRegisterDispatchMiddleware = registerCodexPlusDispatchMiddleware;\n"
+        "\n"
+    )
+    replace_exact_once(path, install_anchor, middleware_code + install_anchor)
+
+    old_dispatch = (
+        "        dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);\n"
+        "        dispatcher.dispatchMessage = (type, payload) => {\n"
+        "          const message = codexServiceTierRequestOverride({ ...(payload || {}), type });\n"
+        "          const nextType = message?.type || type;\n"
+        "          const { type: _type, ...nextPayload } = message || {};\n"
+        "          return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);\n"
+        "        };\n"
+    )
+    new_dispatch = (
+        "        dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);\n"
+        "        dispatcher.dispatchMessage = (type, payload) => {\n"
+        "          const message = codexServiceTierRequestOverride({ ...(payload || {}), type });\n"
+        "          return runCodexPlusDispatchMiddlewares(message, (finalMessage) => {\n"
+        "            const nextType = finalMessage?.type || type;\n"
+        "            const { type: _type, ...nextPayload } = finalMessage || {};\n"
+        "            return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);\n"
+        "          });\n"
+        "        };\n"
+    )
+    replace_exact_once(path, old_dispatch, new_dispatch)
 
 
 def patch_assets_rs() -> None:
@@ -131,7 +218,9 @@ def main() -> None:
     check_upstream_files(baseline_files)
     reset_build_copy()
     patch_cargo_toml()
+    patch_cargo_lock()
     patch_routes_rs()
+    patch_renderer_inject_js()
     patch_assets_rs()
     print(f"副本已生成：{BUILD_ROOT}")
 

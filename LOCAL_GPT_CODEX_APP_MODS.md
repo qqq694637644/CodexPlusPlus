@@ -6,7 +6,7 @@
 > 对于 `D:\repos\CodexPlusPlus` 这个原项目：
 >
 > - 如果当前 `threadId` 还没有对应 workspace，就创建固定目录：
->   `D:\repos\CodexPlusPlus\data\thread-<threadId>`
+>   `D:\repos\CodexPlusPlus\data\{threadId}`
 > - 如果当前 `threadId` 已经有对应 workspace，就继续把 `cwd` 改到这个固定目录
 
 不新增入口，不改原生 UI，不接管 Git。
@@ -22,7 +22,7 @@
   → 如果 cwd 不是 D:\repos\CodexPlusPlus
        直接放行
   → 如果 cwd 是 D:\repos\CodexPlusPlus
-       计算 workspace_path = D:\repos\CodexPlusPlus\data\thread-<threadId>
+       计算 workspace_path = D:\repos\CodexPlusPlus\data\{threadId}
        若 workspace 不存在：
          调用 bridge/bootstrap 创建该目录并写入 AGENTS.md / .agents\skills
        payload.request.params.cwd = workspace_path
@@ -69,7 +69,7 @@ workspace 理论上应存在但实际不存在
 ```text
 SOURCE_CWD   = D:\repos\CodexPlusPlus
 WORKSPACE_ROOT = D:\repos\CodexPlusPlus\data
-WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\thread-<threadId>
+WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\{threadId}
 ```
 
 规则：
@@ -80,13 +80,13 @@ WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\thread-<threadId>
 3. 若 cwd != SOURCE_CWD：
      直接放行
 4. 若 cwd == SOURCE_CWD：
-     用 threadId 计算固定目录 thread-<threadId>
+     用 threadId 计算固定目录 data\{threadId}
      若目录不存在：
        创建并 bootstrap
      将 payload.request.params.cwd 改成该固定目录
      放行
 5. 若后续同一 threadId 再次请求，即使 incoming cwd 又回到 SOURCE_CWD：
-     仍然改回 thread-<threadId>
+     仍然改回 {threadId}
 ```
 
 这等价于：
@@ -130,7 +130,7 @@ const SOURCE_CWD = "D:\\repos\\CodexPlusPlus";
 const WORKSPACE_ROOT = "D:\\repos\\CodexPlusPlus\\data";
 
 function workspacePathForThread(threadId) {
-  return `${WORKSPACE_ROOT}\\thread-${threadId}`;
+  return `${WORKSPACE_ROOT}\\${threadId}`;
 }
 
 if (type === "mcp-request" && payload?.request?.method === "turn/start") {
@@ -149,20 +149,19 @@ if (type === "mcp-request" && payload?.request?.method === "turn/start") {
 
   const workspacePath = workspacePathForThread(threadId);
   const result = await window.__codexSessionDeleteBridge(
-    "/localgpt/bootstrap-thread-workspace",
+    "/localgpt/prepare-turn-start",
     {
       threadId,
-      sourceCwd: cwd,
-      workspacePath,
+      cwd,
       input,
     }
   );
 
-  if (!result?.workspace_path) {
-    throw new Error("bootstrap 返回缺少 workspace_path");
+  if (result?.action !== "rewrite" || !result.cwd) {
+    throw new Error("LocalGPT bridge 未返回 rewrite");
   }
 
-  payload.request.params.cwd = result.workspace_path;
+  payload.request.params.cwd = result.cwd;
   return originalDispatchMessage(type, payload);
 }
 ```
@@ -188,27 +187,26 @@ crates/codex-plus-core/src/routes.rs
 新增 route：
 
 ```text
-/localgpt/bootstrap-thread-workspace
+/localgpt/prepare-turn-start
 ```
 
 职责：
 
 ```text
-接收 threadId / sourceCwd / workspacePath / input
+接收 threadId / cwd / input
 确认 workspacePath 是否存在
-不存在则调用 Python bootstrap
-存在则做最小校验
-返回 workspace_path 等结果
+不存在则创建 workspace
+存在则只做最小校验，不覆盖
+返回 passthrough 或 rewrite
 ```
 
 最小返回：
 
 ```json
 {
-  "thread_id": "019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec",
-  "workspace_path": "D:\\repos\\CodexPlusPlus\\data\\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec",
-  "agents_path": "D:\\repos\\CodexPlusPlus\\data\\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec\\AGENTS.md",
-  "skills_path": "D:\\repos\\CodexPlusPlus\\data\\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec\\.agents\\skills"
+  "action": "rewrite",
+  "threadId": "019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec",
+  "cwd": "D:\\repos\\CodexPlusPlus\\data\\019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec"
 }
 ```
 
@@ -219,7 +217,7 @@ crates/codex-plus-core/src/routes.rs
 Python 只负责准备环境：
 
 ```text
-创建固定目录 thread-<threadId>
+创建固定目录 data\{threadId}
 写 AGENTS.md
 复制 .agents\skills
 返回 JSON
@@ -238,7 +236,7 @@ CI 操作
 固定目录示例：
 
 ```text
-D:\repos\CodexPlusPlus\data\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec
+D:\repos\CodexPlusPlus\data\019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec
 ```
 
 ---
@@ -330,14 +328,14 @@ cwd 不能作为持久状态来源
 
 ```text
 如果该 threadId 首次出现：
-  在 data 下创建 thread-<threadId>
+  在 data 下创建 {threadId}
   本次 turn 的 cwd 改到该目录
 
 如果该 threadId 再次出现：
   即使 incoming cwd 还是 D:\repos\CodexPlusPlus
-  也会继续被改回 thread-<threadId>
+  也会继续被改回 {threadId}
 
-Codex 回答当前目录是 thread-<threadId>
+Codex 回答当前目录是 {threadId}
 AGENTS.md 已加载
 .agents\skills 已加载
 ```

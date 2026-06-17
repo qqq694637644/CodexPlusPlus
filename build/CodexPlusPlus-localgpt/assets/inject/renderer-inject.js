@@ -1788,6 +1788,30 @@
     return message;
   }
 
+  function registerCodexPlusDispatchMiddleware(name, handler) {
+    if (!name || typeof handler !== "function") throw new Error("Invalid dispatch middleware");
+    const middlewares = Array.isArray(window.__codexPlusDispatchMiddlewares) ? window.__codexPlusDispatchMiddlewares : [];
+    if (middlewares.some((middleware) => middleware.name === name)) throw new Error(`Dispatch middleware already registered: ${name}`);
+    middlewares.push({ name, handler });
+    window.__codexPlusDispatchMiddlewares = middlewares;
+  }
+
+  function runCodexPlusDispatchMiddlewares(message, finalDispatch) {
+    const middlewares = Array.isArray(window.__codexPlusDispatchMiddlewares) ? window.__codexPlusDispatchMiddlewares : [];
+    const runAt = (index, currentMessage) => {
+      if (!currentMessage || typeof currentMessage !== "object") throw new Error("Dispatch middleware returned invalid message");
+      if (index >= middlewares.length) return finalDispatch(currentMessage);
+      const nextMessage = middlewares[index].handler(currentMessage);
+      if (nextMessage && typeof nextMessage.then === "function") {
+        return nextMessage.then((resolvedMessage) => runAt(index + 1, resolvedMessage));
+      }
+      return runAt(index + 1, nextMessage);
+    };
+    return runAt(0, message);
+  }
+
+  window.__codexPlusRegisterDispatchMiddleware = registerCodexPlusDispatchMiddleware;
+
   function installCodexServiceTierDispatcherPatch() {
     if (window.__codexServiceTierRequestOverrideInstalled === codexServiceTierRequestOverrideVersion) return;
     const patch = async () => {
@@ -1803,9 +1827,11 @@
         dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);
         dispatcher.dispatchMessage = (type, payload) => {
           const message = codexServiceTierRequestOverride({ ...(payload || {}), type });
-          const nextType = message?.type || type;
-          const { type: _type, ...nextPayload } = message || {};
-          return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);
+          return runCodexPlusDispatchMiddlewares(message, (finalMessage) => {
+            const nextType = finalMessage?.type || type;
+            const { type: _type, ...nextPayload } = finalMessage || {};
+            return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);
+          });
         };
         window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
         sendCodexPlusDiagnostic("service_tier_dispatcher_patch_installed", {});

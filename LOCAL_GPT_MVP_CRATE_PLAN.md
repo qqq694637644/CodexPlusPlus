@@ -4,7 +4,7 @@
 
 第一版只做一件事：
 
-> 在 Codex App 发出 `mcp-request / turn/start` 时，命中指定源目录后，把 `cwd` 重写到 `data/threadId`。
+> 在 Codex App 发出 `mcp-request / turn/start` 时，命中指定源目录后，把 `cwd` 重写到 `data/{threadId}`。
 
 不做完整平台，不做复杂抽象，不做 Python 主实现。
 
@@ -18,7 +18,7 @@
 2. 只处理 `request.method === "turn/start"`
 3. 读取 `threadId`、`cwd`、`input`
 4. 当 `cwd == D:\repos\CodexPlusPlus` 时：
-   - 计算目标目录 `D:\repos\CodexPlusPlus\data\threadId`
+   - 计算目标目录 `D:\repos\CodexPlusPlus\data\{threadId}`
    - 若目录不存在则创建
    - 写入 `AGENTS.md`
    - 复制 `.agents\skills`
@@ -274,14 +274,34 @@ format!(
 
 ---
 
-## 7.4 运行副本最小改动清单
+### 7.4 建立 dispatch middleware 管线
+
+修改：
+
+```text
+build/CodexPlusPlus-localgpt/assets/inject/renderer-inject.js
+```
+
+在现有 dispatcher patch 里建立唯一 middleware 管线：
+
+```text
+window.__codexPlusRegisterDispatchMiddleware(name, handler)
+```
+
+LocalGPT 不再动态扫描 `/assets/*.js`，只注册一个 `localgpt-turn-start` handler。
+
+---
+
+## 7.5 运行副本最小改动清单
 
 最终只动这几个运行副本文件：
 
 ```text
 build/CodexPlusPlus-localgpt/crates/codex-plus-core/Cargo.toml
+build/CodexPlusPlus-localgpt/Cargo.lock
 build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/routes.rs
 build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/assets.rs
+build/CodexPlusPlus-localgpt/assets/inject/renderer-inject.js
 ```
 
 其余 LocalGPT 代码全部留在：
@@ -305,7 +325,7 @@ localgpt/
   → Rust 判断是否命中 SOURCE_CWD
       → 否：返回 passthrough
       → 是：
-          计算 threadId
+          计算 {threadId}
           若不存在则 bootstrap
           返回 rewrite + 新 cwd
   → JS 改写 payload.request.params.cwd
