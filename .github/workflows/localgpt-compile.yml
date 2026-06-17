@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/localgpt-compile.yml"
+      - "scripts/ci_windows_target_cache.py"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
       - "build/CodexPlusPlus-localgpt/Cargo.lock"
@@ -12,6 +13,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/localgpt-compile.yml"
+      - "scripts/ci_windows_target_cache.py"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
       - "build/CodexPlusPlus-localgpt/Cargo.lock"
@@ -86,11 +88,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-deps-
 
-      - name: Cache Rust release build intermediates
-        uses: actions/cache@v4
+      - name: Compute Rust target cache keys
+        id: rust-target-cache
+        run: python scripts/ci_windows_target_cache.py
+
+      - name: Restore Rust release build intermediates
+        id: restore-rust-target-cache
+        uses: actions/cache/restore@v4
         with:
-          path: build/CodexPlusPlus-localgpt/target
-          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock') }}
+          path: ${{ steps.rust-target-cache.outputs.target_path }}
+          key: ${{ steps.rust-target-cache.outputs.primary_key }}
+          restore-keys: |
+            ${{ steps.rust-target-cache.outputs.restore_key }}
 
       - name: Install frontend dependencies
         working-directory: build/CodexPlusPlus-localgpt/apps/codex-plus-manager
@@ -105,6 +114,13 @@ jobs:
         env:
           CARGO_INCREMENTAL: "1"
         run: cargo build --release
+
+      - name: Save Rust release build intermediates
+        if: ${{ success() && steps.restore-rust-target-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.rust-target-cache.outputs.target_path }}
+          key: ${{ steps.rust-target-cache.outputs.primary_key }}
 
       - name: Upload Windows binaries
         uses: actions/upload-artifact@v4
