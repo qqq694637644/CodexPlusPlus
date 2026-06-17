@@ -176,7 +176,19 @@ def patch_renderer_inject_js() -> None:
     )
     replace_exact_once(path, install_anchor, middleware_code + install_anchor)
 
-    old_dispatch = (
+    old_service_tier_patch = (
+        "  function installCodexServiceTierDispatcherPatch() {\n"
+        "    if (window.__codexServiceTierRequestOverrideInstalled === codexServiceTierRequestOverrideVersion) return;\n"
+        "    const patch = async () => {\n"
+        "      try {\n"
+        "        const module = await loadCodexAppModule(\"setting-storage-\");\n"
+        "        const dispatcherClass = typeof module.v === \"function\" && String(module.v).includes(\"dispatchMessage\") ? module.v : null;\n"
+        "        const dispatcher = dispatcherClass?.getInstance?.();\n"
+        "        if (!dispatcher || typeof dispatcher.dispatchMessage !== \"function\") throw new Error(\"Codex dispatcher unavailable\");\n"
+        "        if (dispatcher.__codexServiceTierOriginalDispatchMessage) {\n"
+        "          window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;\n"
+        "          return;\n"
+        "        }\n"
         "        dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);\n"
         "        dispatcher.dispatchMessage = (type, payload) => {\n"
         "          const message = codexServiceTierRequestOverride({ ...(payload || {}), type });\n"
@@ -184,8 +196,30 @@ def patch_renderer_inject_js() -> None:
         "          const { type: _type, ...nextPayload } = message || {};\n"
         "          return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);\n"
         "        };\n"
+        "        window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;\n"
+        "        sendCodexPlusDiagnostic(\"service_tier_dispatcher_patch_installed\", {});\n"
+        "      } catch (error) {\n"
+        "        sendCodexPlusDiagnostic(\"service_tier_dispatcher_patch_failed\", {\n"
+        "          errorName: error?.name || \"\",\n"
+        "          errorMessage: error?.message || String(error),\n"
+        "        });\n"
+        "      }\n"
+        "    };\n"
+        "    void patch();\n"
+        "  }\n"
     )
-    new_dispatch = (
+    new_service_tier_patch = (
+        "  function installCodexServiceTierDispatcherPatch() {\n"
+        "    if (window.__codexServiceTierRequestOverrideInstalled === codexServiceTierRequestOverrideVersion) return;\n"
+        "    const patch = async () => {\n"
+        "      try {\n"
+        "        const module = await loadCodexAppModule(\"vscode-api-\");\n"
+        "        const dispatcher = module.f;\n"
+        "        if (!dispatcher || typeof dispatcher.dispatchMessage !== \"function\") throw new Error(\"Codex dispatcher export unavailable: vscode-api-.f\");\n"
+        "        if (dispatcher.__codexServiceTierOriginalDispatchMessage) {\n"
+        "          window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;\n"
+        "          return;\n"
+        "        }\n"
         "        dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);\n"
         "        dispatcher.dispatchMessage = (type, payload) => {\n"
         "          const message = codexServiceTierRequestOverride({ ...(payload || {}), type });\n"
@@ -195,8 +229,20 @@ def patch_renderer_inject_js() -> None:
         "            return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);\n"
         "          });\n"
         "        };\n"
+        "        window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;\n"
+        "        sendCodexPlusDiagnostic(\"service_tier_dispatcher_patch_installed\", {});\n"
+        "      } catch (error) {\n"
+        "        sendCodexPlusDiagnostic(\"service_tier_dispatcher_patch_failed\", {\n"
+        "          errorName: error?.name || \"\",\n"
+        "          errorMessage: error?.message || String(error),\n"
+        "        });\n"
+        "        throw error;\n"
+        "      }\n"
+        "    };\n"
+        "    void patch();\n"
+        "  }\n"
     )
-    replace_exact_once(path, old_dispatch, new_dispatch)
+    replace_exact_once(path, old_service_tier_patch, new_service_tier_patch)
 
     old_upstream_worktree_patch = (
         "  function installUpstreamPendingWorktreeDispatcherPatch() {\n"
@@ -319,3 +365,4 @@ if __name__ == "__main__":
     except Exception as error:
         print(f"prepare_副本.py 失败：{error}", file=sys.stderr)
         raise SystemExit(1)
+

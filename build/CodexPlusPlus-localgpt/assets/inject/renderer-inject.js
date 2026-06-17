@@ -1816,10 +1816,9 @@
     if (window.__codexServiceTierRequestOverrideInstalled === codexServiceTierRequestOverrideVersion) return;
     const patch = async () => {
       try {
-        const module = await loadCodexAppModule("setting-storage-");
-        const dispatcherClass = typeof module.v === "function" && String(module.v).includes("dispatchMessage") ? module.v : null;
-        const dispatcher = dispatcherClass?.getInstance?.();
-        if (!dispatcher || typeof dispatcher.dispatchMessage !== "function") throw new Error("Codex dispatcher unavailable");
+        const module = await loadCodexAppModule("vscode-api-");
+        const dispatcher = module.f;
+        if (!dispatcher || typeof dispatcher.dispatchMessage !== "function") throw new Error("Codex dispatcher export unavailable: vscode-api-.f");
         if (dispatcher.__codexServiceTierOriginalDispatchMessage) {
           window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
           return;
@@ -1840,6 +1839,7 @@
           errorName: error?.name || "",
           errorMessage: error?.message || String(error),
         });
+        throw error;
       }
     };
     void patch();
