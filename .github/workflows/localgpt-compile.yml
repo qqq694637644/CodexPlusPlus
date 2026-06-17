@@ -47,3 +47,39 @@ jobs:
 
       - name: Check codex-plus-core with LocalGPT path dependency
         run: cargo check --manifest-path build/CodexPlusPlus-localgpt/Cargo.toml -p codex-plus-core --all-targets
+
+  windows-artifacts:
+    name: Windows artifacts
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: build/CodexPlusPlus-localgpt/apps/codex-plus-manager
+        run: npm install --package-lock=false
+
+      - name: Build frontend
+        working-directory: build/CodexPlusPlus-localgpt/apps/codex-plus-manager
+        run: npm run vite:build
+
+      - name: Build release binaries
+        working-directory: build/CodexPlusPlus-localgpt
+        run: cargo build --release
+
+      - name: Upload Windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-plus-plus-localgpt-windows-binaries
+          path: |
+            build/CodexPlusPlus-localgpt/target/release/codex-plus-plus.exe
+            build/CodexPlusPlus-localgpt/target/release/codex-plus-plus-manager.exe
+          if-no-files-found: error
