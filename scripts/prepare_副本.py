@@ -253,6 +253,10 @@ def patch_renderer_inject_js() -> None:
 
 
 def patch_model_catalog_rs() -> None:
+    # 当前 pinned upstream 的这个测试里重复设置 relay_mode，
+    # 会导致 `cargo check --all-targets` 编译失败。
+    # 这不是 LocalGPT 功能接线；只是让运行副本在 upstream 修复前保持可编译。
+    # 如果后续 upstream 修复该问题，基线 hash 会变化，脚本会 fail fast 提醒更新本替换规则。
     path = BUILD_ROOT / "crates" / "codex-plus-core" / "tests" / "model_catalog.rs"
     old = (
         '                    relay_mode: RelayMode::PureApi,\n'

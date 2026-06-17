@@ -81,7 +81,7 @@ localgpt/
 - `localgpt/` 是仓库根目录下的独立第三方模块
 - 不放进 `build/CodexPlusPlus-localgpt/crates/`
 - 目标是尽量不污染上游镜像目录；运行副本由脚本生成，方便后续持续同步 upstream
-- `localgpt/config.json` 显式声明业务路径，不从编译路径推导
+- 路径由 `localgpt` crate 的编译时 `CARGO_MANIFEST_DIR` 推导：`SOURCE_CWD = parent(CARGO_MANIFEST_DIR)`，`WORKSPACE_ROOT = SOURCE_CWD\data`
 
 ---
 
@@ -185,11 +185,14 @@ localgpt/src/bootstrap.rs
 
 ## 6. 目录规则
 
-路径配置写在：
+路径由编译时 `CARGO_MANIFEST_DIR` 推导：
 
 ```text
-localgpt/config.json
+SOURCE_CWD     = parent(CARGO_MANIFEST_DIR)
+WORKSPACE_ROOT = SOURCE_CWD\data
 ```
+
+注意：修改 `localgpt` 所在位置后必须重新编译运行副本。
 
 固定规则：
 
@@ -206,6 +209,7 @@ WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\{threadId}
 - 不依赖内存状态
 - 重启后仍然稳定
 - 不使用 `env!("CARGO_MANIFEST_DIR")` 推导业务路径
+- 不允许把 `workspace_root` 配到 `source_cwd\data` 之外
 
 ---
 
@@ -403,4 +407,5 @@ localgpt/
 - Platform Gateway
 
 当前一律不做。
+
 
