@@ -59,13 +59,36 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: build/CodexPlusPlus-localgpt/apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache frontend third-party dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/CodexPlusPlus-localgpt/apps/codex-plus-manager/node_modules
+          key: ${{ runner.os }}-node-22-codex-manager-node-modules-${{ hashFiles('build/CodexPlusPlus-localgpt/apps/codex-plus-manager/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-22-codex-manager-node-modules-
+
+      - name: Cache Cargo third-party dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock', 'localgpt/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-deps-
+
       - name: Install frontend dependencies
         working-directory: build/CodexPlusPlus-localgpt/apps/codex-plus-manager
-        run: npm install --package-lock=false
+        run: npm install --package-lock=false --prefer-offline --no-audit
 
       - name: Build frontend
         working-directory: build/CodexPlusPlus-localgpt/apps/codex-plus-manager
