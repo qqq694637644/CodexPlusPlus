@@ -53,6 +53,8 @@ jobs:
   windows-artifacts:
     name: Windows artifacts
     runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -88,9 +90,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-deps-
 
-      - name: Restore Rust release build intermediates
-        id: restore-rust-target-cache
-        uses: actions/cache/restore@v4
+      - name: Cache Rust release build intermediates
+        uses: actions/cache@v4
         with:
           path: build/CodexPlusPlus-localgpt/target
           key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock') }}-${{ github.sha }}
@@ -107,16 +108,7 @@ jobs:
 
       - name: Build release binaries
         working-directory: build/CodexPlusPlus-localgpt
-        env:
-          CARGO_INCREMENTAL: "1"
         run: cargo build --release
-
-      - name: Save Rust release build intermediates
-        if: ${{ success() && steps.restore-rust-target-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: build/CodexPlusPlus-localgpt/target
-          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock') }}-${{ github.sha }}
 
       - name: Upload Windows binaries
         uses: actions/upload-artifact@v4
