@@ -1,269 +1,251 @@
-# LocalGPT 需要改造的 Codex App 能力清单
+# LocalGPT Codex App 改造重点
 
-本文只记录 **Codex App / Codex++ 注入层需要具备或改造的能力**。
+结论：
 
-LocalGPT Python 层怎么创建 workspace、`.venv`、`AGENTS.md`、skills，不放在本文展开。
+> 第一版只拦截 `mcp-request / turn/start`。  
+> 对于 `D:\repos\CodexPlusPlus` 这个原项目：
+>
+> - 如果当前 `threadId` 还没有对应 workspace，就创建固定目录：
+>   `D:\repos\CodexPlusPlus\data\thread-<threadId>`
+> - 如果当前 `threadId` 已经有对应 workspace，就继续把 `cwd` 改到这个固定目录
 
-当前结论：
-
-> LocalGPT 不需要改 Codex native 的 Git 行为，也不需要替 Codex 执行 Git。  
-> 需要改的是 Codex App 壳层：拦截正常输入提交、判断当前项目是否属于 LocalGPT 项目、调用 bridge、打开新 workspace、新建对话、让 Codex 进入刚创建的 workspace。
-
----
-
-## 1. 需要改造的能力总览
-
-### A. 拦截正常输入提交并判断是否进入 LocalGPT 流程
-
-目标：
-
-- 不新增 `LocalGPT 新任务` 按钮。
-- 用户仍然使用 Codex App 原生输入框。
-- 用户在当前项目下输入任务并按 Enter。
-- JS 注入层在提交前读取当前项目目录。
-- 如果当前项目目录是 LocalGPT 管理范围，就拦截原始提交，改走 LocalGPT bootstrap 流程。
-- 如果不是 LocalGPT 项目，就完全放行，保持 Codex App 原生行为。
-
-需要探测：
-
-- Codex App 输入框 DOM 结构。
-- 按 Enter 提交时触发的是：
-  - form submit；
-  - keydown；
-  - button click；
-  - dispatcher message；
-  - 还是组合事件。
-- 如何稳定读取输入框当前文本。
-- 如何稳定读取当前项目目录。
-- 如何判断“当前项目目录是否是我们的项目”。
-- 如何在 LocalGPT 命中时阻止原生提交。
-- 如何在非 LocalGPT 项目时完全不干扰原生提交。
-
-当前源码证据：
-
-- 已有项目区 DOM 识别逻辑：
-  - `sidebarProjectRows()`
-  - `projectRowPath(row)`
-  - `currentProjectContext()`
-- 已有 dispatcher patch 模式：
-  - `loadCodexAppModule("setting-storage-")`
-  - `dispatcher.dispatchMessage(type, payload)`
-- 已观察到与提交相关的消息类型：
-  - `start-conversation`
-  - `start-turn-for-host`
-  - `send-cli-request-for-host`
-
-初步判断：
-
-> 第一版不加 UI 入口。  
-> 优先探测“输入框 Enter → dispatcher payload”链路。  
-> LocalGPT 的触发条件应该是“当前项目路径命中 LocalGPT 规则”，而不是额外按钮。
+不新增入口，不改原生 UI，不接管 Git。
 
 ---
 
-### B. JS 注入层调用本地 bridge
+## 1. 最终链路
 
-目标：
+```text
+用户在原生输入框输入任务并按 Enter
+  → Codex App 发出 mcp-request / turn/start
+  → JS 注入层读取 threadId / cwd / input
+  → 如果 cwd 不是 D:\repos\CodexPlusPlus
+       直接放行
+  → 如果 cwd 是 D:\repos\CodexPlusPlus
+       计算 workspace_path = D:\repos\CodexPlusPlus\data\thread-<threadId>
+       若 workspace 不存在：
+         调用 bridge/bootstrap 创建该目录并写入 AGENTS.md / .agents\skills
+       payload.request.params.cwd = workspace_path
+       放行原始 dispatchMessage
+```
 
-- 前端把用户输入传给 Rust bridge。
-- Rust bridge 调 Python `bootstrap-project`。
-- 返回：
+失败策略：
 
-```json
-{
-  "workspace_path": "D:\\LocalGPT\\workspaces\\localgpt-a1b2c3d4",
-  "venv_path": "...\\.venv",
-  "agents_path": "...\\AGENTS.md",
-  "skills_path": "...\\.agents\\skills",
-  "agents_content": "..."
+```text
+workspace 创建失败
+  → 取消本次 turn/start
+  → 不允许回退到旧 cwd 执行
+
+workspace 理论上应存在但实际不存在
+  → 取消本次 turn/start
+  → 不允许回退到旧 cwd 执行
+```
+
+---
+
+## 2. 为什么这样做
+
+已验证：
+
+- `turn/start.params.cwd` 决定 Codex native 的真实工作目录。
+- `turn/start.params.input` 里有完整用户输入。
+- `turn/start.params.threadId` 在同一会话内稳定，可作为 workspace 键。
+- 重启 Codex App 后，同一会话的 `threadId` 仍可保持不变。
+- 但 `cwd` 不会自动记住之前改写后的 workspace，后续请求仍可能回到原始项目目录。
+- 只改 `turn/start.cwd`，目标 workspace 下的 `AGENTS.md` 和 `.agents\skills` 会被加载。
+- 只取消 `thread-prewarm-start` 不够，它只是预热。
+
+所以：
+
+> 第一版不做复杂状态机，不猜“第一次输入”还是“继续输入”。  
+> 只要 `turn/start` 的 `threadId` 已经能确定 workspace，就始终强制改写到这个固定目录。
+
+---
+
+## 3. 核心规则
+
+设：
+
+```text
+SOURCE_CWD   = D:\repos\CodexPlusPlus
+WORKSPACE_ROOT = D:\repos\CodexPlusPlus\data
+WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\thread-<threadId>
+```
+
+规则：
+
+```text
+1. 只处理 type = "mcp-request" 且 request.method = "turn/start"
+2. 读取 threadId / cwd / input
+3. 若 cwd != SOURCE_CWD：
+     直接放行
+4. 若 cwd == SOURCE_CWD：
+     用 threadId 计算固定目录 thread-<threadId>
+     若目录不存在：
+       创建并 bootstrap
+     将 payload.request.params.cwd 改成该固定目录
+     放行
+5. 若后续同一 threadId 再次请求，即使 incoming cwd 又回到 SOURCE_CWD：
+     仍然改回 thread-<threadId>
+```
+
+这等价于：
+
+```text
+threadId 决定唯一 workspace
+同一个 threadId 永远落到同一个 workspace
+```
+
+---
+
+## 4. 需要改的代码能力
+
+### 4.1 JS 注入层
+
+位置：
+
+```text
+assets/inject/renderer-inject.js
+```
+
+新增能力：
+
+```text
+patch dispatcher.dispatchMessage
+捕获 type = "mcp-request"
+确认 request.method = "turn/start"
+读取 request.params.threadId
+读取 request.params.cwd
+若 cwd 命中 SOURCE_CWD：
+  计算固定 workspace 路径
+  如目录不存在则 await bridge bootstrap
+  改写 request.params.cwd
+失败时取消 turn/start
+```
+
+核心伪代码：
+
+```js
+const SOURCE_CWD = "D:\\repos\\CodexPlusPlus";
+const WORKSPACE_ROOT = "D:\\repos\\CodexPlusPlus\\data";
+
+function workspacePathForThread(threadId) {
+  return `${WORKSPACE_ROOT}\\thread-${threadId}`;
 }
-```
 
-需要新增 bridge route：
+if (type === "mcp-request" && payload?.request?.method === "turn/start") {
+  const params = payload.request?.params || {};
+  const threadId = params.threadId || "";
+  const cwd = params.cwd || "";
+  const input = params.input || [];
 
-```text
-/localgpt/bootstrap-project
-```
-
-后续平台能力 route：
-
-```text
-/localgpt/platform
-/localgpt/sync-artifacts
-```
-
-当前源码证据：
-
-- `crates/codex-plus-core/src/routes.rs`
-  - `handle_bridge_request(...)`
-  - 已有多条本地能力路由：
-    - `/settings/get`
-    - `/settings/set`
-    - `/upstream-worktree/create`
-    - `/move-thread-workspace`
-    - `/zed-remote/open`
-- `assets/inject/renderer-inject.js`
-  - 已通过 `window.__codexSessionDeleteBridge(path, payload)` 调 bridge。
-  - `sendCodexPlusDiagnostic(...)` 已在用 bridge。
-
-初步判断：
-
-> bridge 能力已经存在，只需要新增 LocalGPT route 和 JS 调用封装。
-
----
-
-### C. 创建 workspace 后，让 Codex App 打开该 workspace
-
-目标：
-
-- Python 创建空 workspace 后，Codex App 能进入该 workspace。
-- 新对话应该以 `workspace_path` 作为项目目录。
-- Codex native 后续 shell / git / python 都在该 workspace 里运行。
-
-需要探测：
-
-- Codex App 原生“打开项目 / 进入项目”的消息类型是什么。
-- 新对话的 `start-conversation` payload 里 workspace 字段是什么。
-- 是否能通过 dispatchMessage 构造打开 workspace。
-- 如果不能直接打开，是否可用已有 `/move-thread-workspace` 创建后迁移当前 thread。
-
-当前源码证据：
-
-- `assets/inject/renderer-inject.js` 已经能 patch Codex dispatcher：
-  - `loadCodexAppModule("setting-storage-")`
-  - 找 `dispatchMessage`
-  - 包装 `dispatcher.dispatchMessage(type, payload)`
-- 已观察到这些消息类型：
-  - `start-conversation`
-  - `send-cli-request-for-host`
-  - `start-thread-for-host`
-  - `start-turn-for-host`
-  - `pending-worktree-create`
-- 已有 workspace 迁移 route：
-  - `routes.rs`：`/move-thread-workspace`
-  - JS：`moveSessionToProject(ref, target)`
-
-初步判断：
-
-> 这是最关键探测点。  
-> 要先抓一次 Codex App 原生“在某项目中新建对话”的 `start-conversation` payload，再决定怎么注入 `workspace_path`。
-
----
-
-### D. AGENTS.md / skills 加载确认
-
-目标：
-
-- Codex native 进入 workspace 后能读取：
-  - `AGENTS.md`
-  - `.agents\skills\...`
-
-需要探测：
-
-- Codex App 是否自动读取 workspace 根目录 `AGENTS.md`。
-- workspace 内 `.agents\skills` 是否被当前 Codex 加载。
-- 如果 `.agents\skills` 不自动加载，是否需要写入项目 `.codex/config.toml` 或通过现有机制指定 skill 路径。
-
-当前设计：
-
-```text
-D:\LocalGPT\workspaces\localgpt-a1b2c3d4\
-  .venv\
-  .agents\
-    skills\
-      localgpt-platform\
-        SKILL.md
-      localgpt-workspace\
-        SKILL.md
-  AGENTS.md
-```
-
-初步判断：
-
-> AGENTS.md 大概率可用；`.agents\skills` 需要实测。  
-> 不要在没确认前继续扩展 skill 结构。
-
----
-
-### E. Platform Gateway 暴露给 Codex 的方式
-
-目标：
-
-- Codex 在 workspace 中需要查 PR / CI / artifact 时，有明确入口。
-
-可能方式：
-
-1. 通过 skill 指令告诉 Codex 调本地 Python CLI：
-
-```powershell
-python -m localgpt.cli platform --input-json <path>
-```
-
-2. 通过 Codex++ bridge route 给前端用：
-
-```text
-/localgpt/platform
-```
-
-3. 后续如果需要，再做 MCP。
-
-当前判断：
-
-> 第一版不急着做 MCP。  
-> 先让 workspace 内 AGENTS.md / skill 写清楚 CLI 用法，够用。
-
----
-
-## 2. 当前应该优先探测的顺序
-
-### 第 1 步：探测输入框 Enter 提交链路
-
-状态：已完成第一轮探测。
-
-探测文件：
-
-```text
-scripts/probe_codex_dispatcher.py
-_dump/localgpt-dispatcher-probe-enter.json
-```
-
-探测方式：
-
-- 通过 CDP 注入 dispatcher patch。
-- 当前 Codex App 的 dispatcher 来源：
-
-```text
-app://-/assets/vscode-api-D4QUNFB4.js#d.getInstance()
-```
-
-已观察到的关键链路：
-
-```text
-输入框输入文本
-  → persisted-atom-update: composer-prompt-drafts-v1
-  → thread-prewarm-start
-      request.method = "thread/start"
-      request.params.cwd = 当前项目目录
-  → mcp-request
-      request.method = "turn/start"
-      request.params.cwd = 当前项目目录
-      request.params.input[0].text = 用户输入
-  → thread-stream-state-changed
-```
-
-本次实测关键字段：
-
-```json
-{
-  "type": "thread-prewarm-start",
-  "request": {
-    "method": "thread/start",
-    "params": {
-      "cwd": "D:\\repos\\CodexPlusPlus"
-    }
+  if (!threadId) {
+    throw new Error("turn/start 缺少 threadId");
   }
+
+  if (cwd !== SOURCE_CWD) {
+    return originalDispatchMessage(type, payload);
+  }
+
+  const workspacePath = workspacePathForThread(threadId);
+  const result = await window.__codexSessionDeleteBridge(
+    "/localgpt/bootstrap-thread-workspace",
+    {
+      threadId,
+      sourceCwd: cwd,
+      workspacePath,
+      input,
+    }
+  );
+
+  if (!result?.workspace_path) {
+    throw new Error("bootstrap 返回缺少 workspace_path");
+  }
+
+  payload.request.params.cwd = result.workspace_path;
+  return originalDispatchMessage(type, payload);
 }
 ```
+
+注意：
+
+- 必须 `await` 完成后再放行。
+- 不能先放行，再后台补 workspace。
+- `threadId` 缺失直接 fail fast。
+- bridge 失败就不要调用原始 `dispatchMessage`。
+- 不能因为 bootstrap 失败而回退原目录继续执行。
+
+---
+
+### 4.2 Rust bridge
+
+位置：
+
+```text
+crates/codex-plus-core/src/routes.rs
+```
+
+新增 route：
+
+```text
+/localgpt/bootstrap-thread-workspace
+```
+
+职责：
+
+```text
+接收 threadId / sourceCwd / workspacePath / input
+确认 workspacePath 是否存在
+不存在则调用 Python bootstrap
+存在则做最小校验
+返回 workspace_path 等结果
+```
+
+最小返回：
+
+```json
+{
+  "thread_id": "019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec",
+  "workspace_path": "D:\\repos\\CodexPlusPlus\\data\\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec",
+  "agents_path": "D:\\repos\\CodexPlusPlus\\data\\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec\\AGENTS.md",
+  "skills_path": "D:\\repos\\CodexPlusPlus\\data\\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec\\.agents\\skills"
+}
+```
+
+---
+
+### 4.3 Python bootstrap
+
+Python 只负责准备环境：
+
+```text
+创建固定目录 thread-<threadId>
+写 AGENTS.md
+复制 .agents\skills
+返回 JSON
+```
+
+不负责：
+
+```text
+Git 操作
+PR 操作
+CI 操作
+任务编排
+线程判断
+```
+
+固定目录示例：
+
+```text
+D:\repos\CodexPlusPlus\data\thread-019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec
+```
+
+---
+
+## 5. 探测证据
+
+### 5.1 原生提交 payload
 
 ```json
 {
@@ -271,352 +253,99 @@ app://-/assets/vscode-api-D4QUNFB4.js#d.getInstance()
   "request": {
     "method": "turn/start",
     "params": {
+      "threadId": "019ed3d7-2a4a-7e02-b92a-2ddb75c9c2ec",
       "cwd": "D:\\repos\\CodexPlusPlus",
       "input": [
         {
           "type": "text",
-          "text": "你好测试2\n"
+          "text": "用户输入内容\n"
         }
-      ],
-      "responsesapiClientMetadata": {
-        "workspace_kind": "project"
-      }
+      ]
     }
   },
   "hostId": "local"
 }
 ```
 
-结论：
+### 5.2 一次改写、后续只观察的验证结果
 
-> 当前版本的输入提交链路可以在 dispatcher 层观测。  
-> 真正决定执行目录的是 `thread/start` 和 `turn/start` payload 里的 `cwd`。  
-> LocalGPT 后续要么在 DOM Enter 阶段提前 bootstrap，再让原生提交使用新 cwd；要么在 dispatcher 层改写 `thread-prewarm-start` / `mcp-request turn/start` 的 `cwd`。
-
-下一步要继续探测：
-
-- `thread-prewarm-start` 和 `mcp-request turn/start` 是否可以安全改写 `cwd`。
-- 改写 `cwd` 后 Codex native 是否真的在新 workspace 中执行。
-- 如果 dispatcher 层不能在调用原始 dispatcher 前阻塞等待 bootstrap，则需要改在 DOM Enter capture 阶段拦截。
-
-补充探测：dispatcher 层阻塞式等待可行。
-
-探测文件：
+验证结果：
 
 ```text
-scripts/probe_codex_async_cwd_rewrite.py
-_dump/localgpt-async-cwd-rewrite-probe.json
-```
-
-探测方式：
-
-- 将 `dispatcher.dispatchMessage` 改成 `async` wrapper，但不先调用原始 dispatcher。
-- 对 `thread-prewarm-start` 和 `mcp-request turn/start` 人为等待 1500ms。
-- 等待后再改写 `cwd` 并调用原始 dispatcher。
-- 这是“await 后再放行”，不是“先放行，后台异步后补”。
-
-实测记录：
-
-```text
-thread-prewarm-start:
-  before-delay 1500ms
-  rewrite cwd -> D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
-
-mcp-request turn/start:
-  before-delay 1500ms
-  rewrite cwd -> D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
-```
-
-Codex App 返回验证：
-
-```text
-当前工作目录是：
-D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
-LOCALGPT_PROBE_AGENTS_LOADED
-```
-
-结论：
-
-> 可以在 dispatcher 层阻塞式等待 LocalGPT bootstrap。  
-> 因此第一版不必做 DOM Enter capture 阻断。  
-> 推荐实现路径：dispatcher patch 捕获 `thread-prewarm-start`，读取原始 `cwd` 和输入任务，调用 `/localgpt/bootstrap-project`，拿到 `workspace_path` 后改写本次 `thread/start` 与后续 `turn/start` 的 `cwd`。
-
-注意：
-
-> 不能做后台异步后补。  
-> 必须在调用原始 `dispatchMessage` 之前完成 bootstrap 和 `cwd` 改写。  
-> 一旦原始 `thread/start` / `turn/start` 已经用旧 `cwd` 放行，`AGENTS.md` 和 `.agents\skills` 的加载时机就已经错过。
-
-目标：
-
-- 记录用户在原生输入框按 Enter 时触发的 DOM 事件和 dispatcher `type/payload`。
-- 特别关注：
-  - `start-conversation`
-  - `start-turn-for-host`
-  - `send-cli-request-for-host`
-  - `sourceWorkspaceRoot`
-  - `cwd`
-  - `workspace`
-  - `project`
-  - `startingState`
-
-建议方法：
-
-- 在 `renderer-inject.js` 增加临时观测 patch；
-- 或在 DevTools Console 手动 patch dispatcher；
-- 输出到 console / diagnostics。
-
-验收：
-
-- 能记录一次普通项目输入 Enter 的 payload。
-- 能记录一次 LocalGPT 项目输入 Enter 的 payload。
-- 能判断拦截点应该在 DOM submit/keydown 还是 dispatcher 层。
-
----
-
-### 第 2 步：探测如何打开指定 workspace
-
-状态：已完成第一轮探测，dispatcher 层改写 `cwd` 可行。
-
-探测文件：
-
-```text
-scripts/probe_codex_cwd_rewrite.py
-_dump/localgpt-cwd-rewrite-probe.json
-```
-
-探测 workspace：
-
-```text
-D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
-```
-
-探测方式：
-
-- 注入 dispatcher patch。
-- 在一次发送窗口内改写：
-  - `thread-prewarm-start` / `thread/start` 的 `params.cwd`
-  - `mcp-request` / `turn/start` 的 `params.cwd`
-  - `generate-thread-title` fetch body 的 `cwd`
-
-实测改写记录：
-
-```text
-thread-prewarm-start:
+第一次 turn/start：
   original cwd = D:\repos\CodexPlusPlus
-  next cwd     = D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+  next cwd     = D:\repos\CodexPlusPlus\data\testworkspace
 
-mcp-request turn/start:
-  params.cwd   = D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+后续同一 threadId：
+  有一次 incoming cwd 已经变成 testworkspace
+  但再后面又回到了 D:\repos\CodexPlusPlus
 ```
 
-Codex App 返回验证：
+说明：
 
 ```text
-当前工作目录是：
-D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
-
-已读取到 AGENTS.md，并确认其中的探测说明。
-LOCALGPT_PROBE_AGENTS_LOADED
+第一次改写后，后续 cwd 不稳定。
+不能假设 Codex App 会永久继承第一次改写后的 cwd。
 ```
 
-结论：
+### 5.3 重启后的验证结果
 
-> 不需要找“打开 workspace”的独立 UI 能力。  
-> 当前更简单的实现路径是：用户按 Enter 后，在 dispatcher 层拦截并改写 `thread/start` / `turn/start` 的 `cwd`。  
-> 只要 `cwd` 指向 LocalGPT 创建的随机 workspace，Codex native 就会在该 workspace 中执行，并加载 workspace 根目录的 `AGENTS.md`。
+验证结果：
 
-目标：
+```text
+重启 Codex App 后：
+  threadId 不变
+  cwd 又恢复为 D:\repos\CodexPlusPlus
+```
 
-- 证明可以让 Codex App 进入某个本地目录。
+说明：
 
-候选路径：
-
-1. 模拟原生打开项目行为。
-2. 构造 dispatcher 消息。
-3. 先新建 thread，再调用 `/move-thread-workspace`。
-
-验收：
-
-- Codex App UI 显示新 workspace。
-- Codex native 后续命令 cwd 是该 workspace。
+```text
+threadId 可以作为稳定键
+cwd 不能作为持久状态来源
+```
 
 ---
 
-### 第 3 步：探测 AGENTS.md 是否被加载
+## 6. 第一版不做
 
-目标：
-
-- 在随机 workspace 中写入明显的 `AGENTS.md` 标记。
-- 打开 workspace 后让 Codex 回答或执行任务，确认它是否读到。
-
-验收：
-
-- Codex 明确遵循 `AGENTS.md` 中的测试指令。
+```text
+不新增 LocalGPT 入口
+不拦 DOM Enter
+不模拟打开项目
+不做 prompt.md / context.json / task.json
+不用 git worktree
+不做 Git 包装层
+不做自动 clone / fetch / checkout
+不做自动 PR / CI
+不做复杂会话状态机
+不靠用户输入文本判断新旧线程
+```
 
 ---
 
-### 第 4 步：探测 `.agents\skills` 是否被加载
+## 7. 第一版验收标准
 
-状态：已完成第一轮探测，`.agents\skills` 可被加载。
-
-探测文件：
+用户在原项目下输入任务后：
 
 ```text
-_dump/localgpt-skill-probe.json
+如果该 threadId 首次出现：
+  在 data 下创建 thread-<threadId>
+  本次 turn 的 cwd 改到该目录
+
+如果该 threadId 再次出现：
+  即使 incoming cwd 还是 D:\repos\CodexPlusPlus
+  也会继续被改回 thread-<threadId>
+
+Codex 回答当前目录是 thread-<threadId>
+AGENTS.md 已加载
+.agents\skills 已加载
 ```
 
-探测 workspace：
+失败验收：
 
 ```text
-D:\repos\CodexPlusPlus\_dump\localgpt-probe-workspace-a1b2c3d4
+workspace 缺失或创建失败时
+不会回退原目录执行
+而是直接取消本次 turn/start
 ```
-
-workspace 内 skill：
-
-```text
-.agents\skills\localgpt-probe\SKILL.md
-```
-
-Codex App 返回验证：
-
-```text
-已加载 localgpt-probe skill。
-LOCALGPT_PROBE_AGENTS_LOADED
-LOCALGPT_PROBE_SKILL_LOADED
-```
-
-结论：
-
-> dispatcher 层改写 `cwd` 后，Codex 会加载目标 workspace 下的 `AGENTS.md` 和 `.agents\skills`。  
-> LocalGPT 设计中的 workspace 结构成立。
-
-目标：
-
-- 在 `.agents\skills\localgpt-workspace\SKILL.md` 写一个可观察的技能说明。
-- 看 Codex 是否能发现或遵循。
-
-验收：
-
-- 如果自动加载：保留当前设计。
-- 如果不自动加载：不要硬猜，改成只依赖 `AGENTS.md`，或再研究 Codex skill 加载路径。
-
----
-
-### 第 5 步：探测 bridge 调 Python bootstrap
-
-目标：
-
-- 新增最小 `/localgpt/bootstrap-project` route。
-- 先不做完整平台能力，只返回 mock 或最小真实 workspace。
-
-验收：
-
-- JS 能调用 bridge；
-- Rust 能调用 Python；
-- Python 能创建：
-  - workspace；
-  - `.venv`；
-  - `AGENTS.md`；
-  - `.agents\skills`。
-
----
-
-## 3. 第一阶段最小改造目标
-
-第一阶段只追求这个闭环：
-
-```text
-Codex App 原生输入框输入需求并按 Enter
-  → JS 判断当前项目路径是否命中 LocalGPT
-  → JS 调 /localgpt/bootstrap-project
-  → Python 创建 localgpt-xxxxxxxx workspace
-  → 写 .venv / AGENTS.md / .agents\skills
-  → Codex App 打开该 workspace 的新对话
-  → Codex 后续自己执行 git / 测试 / 修改
-```
-
-暂不做：
-
-- 自动 clone；
-- 自动 fetch；
-- 自动 checkout；
-- 自动创建业务分支；
-- 新增 LocalGPT 按钮；
-- 自动发第一条消息；
-- 自动创建 PR；
-- 自动查 CI。
-
----
-
-## 4. 已确认可复用的现有能力
-
-### 4.1 JS bridge
-
-现有：
-
-```text
-window.__codexSessionDeleteBridge(path, payload)
-```
-
-用途：
-
-- 前端调用 Rust 本地能力。
-
-### 4.2 Rust route 分发
-
-现有：
-
-```rust
-handle_bridge_request(ctx, path, payload)
-```
-
-可新增：
-
-```text
-/localgpt/bootstrap-project
-/localgpt/platform
-/localgpt/sync-artifacts
-```
-
-### 4.3 dispatcher patch
-
-现有模式：
-
-```js
-const module = await loadCodexAppModule("setting-storage-");
-const dispatcherClass = typeof module.v === "function" && String(module.v).includes("dispatchMessage") ? module.v : null;
-const dispatcher = dispatcherClass?.getInstance?.();
-dispatcher.dispatchMessage = (type, payload) => { ... };
-```
-
-用途：
-
-- 可观测或改写 Codex App 内部消息。
-
-### 4.4 项目上下文识别
-
-现有函数：
-
-```js
-currentProjectContext()
-currentProjectRepoPath()
-sidebarProjectRows()
-projectContextFromRow(row)
-```
-
-用途：
-
-- 可帮助定位当前 Codex App 项目状态。
-
----
-
-## 5. 当前最大未知点
-
-1. Codex App 如何通过内部消息打开任意本地 workspace。
-2. `start-conversation` payload 中 workspace 字段到底叫什么。
-3. `AGENTS.md` 在 Codex App 新 workspace 中是否稳定加载。
-4. `.agents\skills` 是否会被 Codex 自动加载。
-5. 输入提交拦截点应该在 DOM 事件层还是 dispatcher 层。
-
-下一步从第 1 点开始探测。
