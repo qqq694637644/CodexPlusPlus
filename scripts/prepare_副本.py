@@ -139,7 +139,9 @@ def patch_routes_rs() -> None:
     )
     new = (
         '        "/upstream-worktree/create" => ctx.runtime.upstream_worktree_create(payload.clone()).await,\n'
-        '        "/localgpt/prepare-turn-start" => localgpt::handle_bridge(payload.clone()).await,\n'
+        '        "/localgpt/prepare-thread-start" => localgpt::prepare_thread_start(payload.clone()).await,\n'
+        '        "/localgpt/commit-thread-start" => localgpt::commit_thread_start(payload.clone()).await,\n'
+        '        "/localgpt/prepare-turn-start" => localgpt::prepare_turn_start(payload.clone()).await,\n'
         '        "/delete" => result_value(ctx.data.delete(session_from_payload(&payload)).await),\n'
     )
     replace_exact_once(path, old, new)
@@ -157,11 +159,39 @@ def patch_renderer_inject_js() -> None:
         "    window.__codexPlusDispatchMiddlewares = middlewares;\n"
         "  }\n"
         "\n"
+        "  function registerCodexPlusDispatchResponseMiddleware(name, handler) {\n"
+        "    if (!name || typeof handler !== \"function\") throw new Error(\"Invalid dispatch response middleware\");\n"
+        "    const middlewares = Array.isArray(window.__codexPlusDispatchResponseMiddlewares) ? window.__codexPlusDispatchResponseMiddlewares : [];\n"
+        "    if (middlewares.some((middleware) => middleware.name === name)) throw new Error(`Dispatch response middleware already registered: ${name}`);\n"
+        "    middlewares.push({ name, handler });\n"
+        "    window.__codexPlusDispatchResponseMiddlewares = middlewares;\n"
+        "  }\n"
+        "\n"
+        "  function runCodexPlusDispatchResponseMiddlewares(message, response) {\n"
+        "    const middlewares = Array.isArray(window.__codexPlusDispatchResponseMiddlewares) ? window.__codexPlusDispatchResponseMiddlewares : [];\n"
+        "    const runAt = (index, currentResponse) => {\n"
+        "      if (index >= middlewares.length) return currentResponse;\n"
+        "      const nextResponse = middlewares[index].handler(message, currentResponse);\n"
+        "      if (nextResponse && typeof nextResponse.then === \"function\") {\n"
+        "        return nextResponse.then((resolvedResponse) => runAt(index + 1, resolvedResponse === undefined ? currentResponse : resolvedResponse));\n"
+        "      }\n"
+        "      return runAt(index + 1, nextResponse === undefined ? currentResponse : nextResponse);\n"
+        "    };\n"
+        "    return runAt(0, response);\n"
+        "  }\n"
+        "\n"
         "  function runCodexPlusDispatchMiddlewares(message, finalDispatch) {\n"
         "    const middlewares = Array.isArray(window.__codexPlusDispatchMiddlewares) ? window.__codexPlusDispatchMiddlewares : [];\n"
         "    const runAt = (index, currentMessage) => {\n"
         "      if (!currentMessage || typeof currentMessage !== \"object\") throw new Error(\"Dispatch middleware returned invalid message\");\n"
-        "      if (index >= middlewares.length) return finalDispatch(currentMessage);\n"
+        "      if (index >= middlewares.length) {\n"
+        "        const finalMessage = currentMessage;\n"
+        "        const response = finalDispatch(finalMessage);\n"
+        "        if (response && typeof response.then === \"function\") {\n"
+        "          return response.then((resolvedResponse) => runCodexPlusDispatchResponseMiddlewares(finalMessage, resolvedResponse));\n"
+        "        }\n"
+        "        return runCodexPlusDispatchResponseMiddlewares(finalMessage, response);\n"
+        "      }\n"
         "      const nextMessage = middlewares[index].handler(currentMessage);\n"
         "      if (nextMessage && typeof nextMessage.then === \"function\") {\n"
         "        return nextMessage.then((resolvedMessage) => runAt(index + 1, resolvedMessage));\n"
@@ -172,6 +202,7 @@ def patch_renderer_inject_js() -> None:
         "  }\n"
         "\n"
         "  window.__codexPlusRegisterDispatchMiddleware = registerCodexPlusDispatchMiddleware;\n"
+        "  window.__codexPlusRegisterDispatchResponseMiddleware = registerCodexPlusDispatchResponseMiddleware;\n"
         "\n"
     )
     replace_exact_once(path, install_anchor, middleware_code + install_anchor)

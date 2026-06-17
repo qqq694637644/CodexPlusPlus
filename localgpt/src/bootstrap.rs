@@ -1,30 +1,62 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
 use crate::paths;
 use crate::templates;
 
-pub fn ensure_workspace(thread_id: &str) -> Result<std::path::PathBuf> {
-    let workspace = paths::workspace_path(thread_id)?;
+#[cfg(windows)]
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn SystemFunction036(
+        random_buffer: *mut std::ffi::c_void,
+        random_buffer_length: u32,
+    ) -> u8;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedWorkspace {
+    pub workspace_id: String,
+    pub workspace_path: PathBuf,
+    pub venv_path: PathBuf,
+}
+
+pub fn create_workspace_for_thread_start() -> Result<PreparedWorkspace> {
+    let workspace_id = format!("{}{}", paths::WORKSPACE_ID_PREFIX, uuid_v4()?);
+    create_workspace(&workspace_id)
+}
+
+pub fn create_workspace(workspace_id: &str) -> Result<PreparedWorkspace> {
+    paths::validate_workspace_id(workspace_id)?;
+    let workspace = paths::workspace_path(workspace_id)?;
+    let venv = paths::venv_path(workspace_id)?;
     let source_root = paths::source_cwd()?;
-    if workspace.exists() && paths::same_existing_path(&workspace, &source_root)? {
+
+    if paths::same_path_key(&workspace, &source_root) {
         bail!("workspace 不能等于源目录：{}", workspace.display());
     }
     if workspace.exists() {
-        validate_existing_workspace(&workspace)?;
-        return Ok(workspace);
+        bail!("workspace 已存在，拒绝复用或补救：{}", workspace.display());
     }
+
     bootstrap_new_workspace(&workspace)?;
-    Ok(workspace)
+
+    Ok(PreparedWorkspace {
+        workspace_id: workspace_id.to_string(),
+        workspace_path: workspace,
+        venv_path: venv,
+    })
 }
 
 fn bootstrap_new_workspace(workspace: &Path) -> Result<()> {
     templates::validate()?;
     let temp_workspace = temp_workspace_path(workspace)?;
     if temp_workspace.exists() {
-        bail!("发现未完成的 workspace 初始化目录：{}", temp_workspace.display());
+        bail!(
+            "发现未完成的 workspace 初始化目录，拒绝补救：{}",
+            temp_workspace.display()
+        );
     }
     if let Some(parent) = workspace.parent() {
         fs::create_dir_all(parent)
@@ -54,32 +86,37 @@ fn bootstrap_workspace_contents(workspace: &Path) -> Result<()> {
 
     copy_dir(&templates::skills_dir()?, &workspace.join(".agents").join("skills"))?;
 
+    let venv_path = workspace.join(".venv");
+    fs::create_dir_all(&venv_path)
+        .with_context(|| format!("创建 .venv 目录失败：{}", venv_path.display()))?;
+
     Ok(())
 }
 
-fn validate_existing_workspace(workspace: &Path) -> Result<()> {
+pub fn validate_existing_workspace(workspace: &Path) -> Result<()> {
     if !workspace.is_dir() {
         bail!("workspace 不是目录：{}", workspace.display());
     }
     let agents_path = workspace.join("AGENTS.md");
     let skills_target = workspace.join(".agents").join("skills");
+    let venv_target = workspace.join(".venv");
     if !agents_path.is_file() {
         bail!("workspace 缺少 AGENTS.md：{}", agents_path.display());
     }
     if !skills_target.is_dir() {
         bail!("workspace 缺少 skills 目录：{}", skills_target.display());
     }
+    if !venv_target.is_dir() {
+        bail!("workspace 缺少 .venv 目录：{}", venv_target.display());
+    }
     Ok(())
 }
 
-fn temp_workspace_path(workspace: &Path) -> Result<std::path::PathBuf> {
+fn temp_workspace_path(workspace: &Path) -> Result<PathBuf> {
     let name = workspace
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("workspace 路径缺少目录名：{}", workspace.display()))?;
-    Ok(workspace.with_file_name(format!(
-        ".{}.localgpt-tmp",
-        name.to_string_lossy()
-    )))
+    Ok(workspace.with_file_name(format!(".{}.tmp", name.to_string_lossy())))
 }
 
 fn copy_dir(source: &Path, target: &Path) -> Result<()> {
@@ -110,4 +147,59 @@ fn copy_dir(source: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn uuid_v4() -> Result<String> {
+    let mut bytes = [0_u8; 16];
+    fill_random(&mut bytes)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
+}
+
+#[cfg(windows)]
+fn fill_random(bytes: &mut [u8]) -> Result<()> {
+    let ok = unsafe { SystemFunction036(bytes.as_mut_ptr().cast(), bytes.len() as u32) };
+    if ok == 0 {
+        bail!("生成 workspace UUID 失败：RtlGenRandom 返回失败");
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn fill_random(bytes: &mut [u8]) -> Result<()> {
+    use std::io::Read;
+
+    let mut file = fs::File::open("/dev/urandom").context("打开 /dev/urandom 失败")?;
+    file.read_exact(bytes).context("读取 /dev/urandom 失败")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uuid_v4_generates_valid_workspace_id_suffix() {
+        let workspace_id = format!("{}{}", paths::WORKSPACE_ID_PREFIX, uuid_v4().unwrap());
+        paths::validate_workspace_id(&workspace_id).unwrap();
+    }
 }
