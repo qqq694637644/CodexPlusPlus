@@ -81,7 +81,7 @@ WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\{threadId}
 }
 ```
 
-注意：修改 `localgpt/config.json` 后必须重新编译运行副本才会生效。
+注意：修改 `localgpt/config.json` 后必须重新编译运行副本才会生效；`templates` 是运行时目录，修改模板后不需要重新编译。
 
 规则：
 
@@ -223,14 +223,14 @@ crates/codex-plus-core/src/routes.rs
 
 ---
 
-### 4.3 Python bootstrap
+### 4.3 Rust bootstrap
 
-Python 只负责准备环境：
+Rust 只负责准备环境：
 
 ```text
 创建固定目录 data\{threadId}
-写 AGENTS.md
-复制 .agents\skills
+从 SOURCE_CWD\templates\AGENTS.md 复制 AGENTS.md
+从 SOURCE_CWD\templates\skills 复制 .agents\skills
 返回 JSON
 ```
 

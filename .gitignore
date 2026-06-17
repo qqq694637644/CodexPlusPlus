@@ -20,5 +20,6 @@ _dump/
 .agents/
 .codex/
 .playwright-daemon/
+data/
 *.zip
 *.exe

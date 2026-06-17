@@ -70,10 +70,11 @@ localgpt/
     templates.rs
   js/
     turn_start_hook.js
-  templates/
-    AGENTS.md
-    skills/
-      ...
+
+templates/
+  AGENTS.md
+  skills/
+    ...
 ```
 
 说明：
@@ -82,6 +83,7 @@ localgpt/
 - 不放进 `build/CodexPlusPlus-localgpt/crates/`
 - 目标是尽量不污染上游镜像目录；运行副本由脚本生成，方便后续持续同步 upstream
 - `localgpt/config.json` 写死业务路径，并通过 `include_str!` 编译进二进制；不使用 `CARGO_MANIFEST_DIR` 推导业务路径
+- workspace 模板放在 `SOURCE_CWD\templates`，运行时复制，不编译进二进制
 
 ---
 
@@ -177,8 +179,8 @@ localgpt/src/bootstrap.rs
 1. 判断是否命中源目录
 2. 根据 `{threadId}` 计算固定 workspace
 3. 目标目录不存在时创建
-4. 写入 `AGENTS.md`
-5. 复制 `.agents\skills`
+4. 从 `SOURCE_CWD\templates\AGENTS.md` 复制 `AGENTS.md`
+5. 从 `SOURCE_CWD\templates\skills` 复制到 `.agents\skills`
 6. 做最小存在性校验
 
 ---
@@ -200,7 +202,7 @@ localgpt/config.json
 }
 ```
 
-注意：`localgpt/config.json` 通过 `include_str!` 编译进二进制，修改后必须重新编译运行副本才会生效。
+注意：`localgpt/config.json` 通过 `include_str!` 编译进二进制，修改后必须重新编译运行副本才会生效；`templates` 是运行时目录，修改模板后不需要重新编译。
 
 固定规则：
 

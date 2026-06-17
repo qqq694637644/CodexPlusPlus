@@ -21,28 +21,16 @@ pub fn ensure_workspace(thread_id: &str) -> Result<std::path::PathBuf> {
 }
 
 fn bootstrap_new_workspace(workspace: &Path) -> Result<()> {
+    templates::validate()?;
+
     fs::create_dir_all(workspace)
         .with_context(|| format!("创建 workspace 目录失败：{}", workspace.display()))?;
 
     let agents_path = workspace.join("AGENTS.md");
-    let agents_content = templates::agents_template();
-    if agents_content.trim().is_empty() {
-        bail!("AGENTS.md 模板为空");
-    }
-    fs::write(&agents_path, agents_content)
-        .with_context(|| format!("写入 AGENTS.md 失败：{}", agents_path.display()))?;
+    fs::copy(templates::agents_path()?, &agents_path)
+        .with_context(|| format!("复制 AGENTS.md 失败：{}", agents_path.display()))?;
 
-    let skill_path = skill_sentinel_path(workspace);
-    let skill_content = templates::workspace_skill_template();
-    if skill_content.trim().is_empty() {
-        bail!("localgpt-workspace skill 模板为空");
-    }
-    if let Some(parent) = skill_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("创建 skill 目录失败：{}", parent.display()))?;
-    }
-    fs::write(&skill_path, skill_content)
-        .with_context(|| format!("写入 skill 失败：{}", skill_path.display()))?;
+    copy_dir(&templates::skills_dir()?, &workspace.join(".agents").join("skills"))?;
 
     validate_existing_workspace(workspace)?;
 
@@ -64,10 +52,32 @@ fn validate_existing_workspace(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-fn skill_sentinel_path(workspace: &Path) -> std::path::PathBuf {
-    workspace
-        .join(".agents")
-        .join("skills")
-        .join("localgpt-workspace")
-        .join("SKILL.md")
+fn copy_dir(source: &Path, target: &Path) -> Result<()> {
+    if target.exists() {
+        bail!("目标 skills 目录已存在：{}", target.display());
+    }
+    fs::create_dir_all(target)
+        .with_context(|| format!("创建 skills 目录失败：{}", target.display()))?;
+    for entry in fs::read_dir(source)
+        .with_context(|| format!("读取模板 skills 目录失败：{}", source.display()))?
+    {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &target_path).with_context(|| {
+                format!(
+                    "复制模板文件失败：{} -> {}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+        } else {
+            bail!("模板 skills 目录包含非普通文件：{}", source_path.display());
+        }
+    }
+    Ok(())
 }
