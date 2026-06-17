@@ -1,0 +1,4 @@
+[submodule "upstream/CodexPlusPlus"]
+	path = upstream/CodexPlusPlus
+	url = https://github.com/BigPizzaV3/CodexPlusPlus.git
+	branch = main
