@@ -196,7 +196,9 @@ pub async fn handle_bridge_request(
             ctx.runtime.upstream_worktree_prepare(payload.clone()).await
         }
         "/upstream-worktree/create" => ctx.runtime.upstream_worktree_create(payload.clone()).await,
-        "/localgpt/prepare-turn-start" => localgpt::handle_bridge(payload.clone()).await,
+        "/localgpt/prepare-thread-start" => localgpt::prepare_thread_start(payload.clone()).await,
+        "/localgpt/commit-thread-start" => localgpt::commit_thread_start(payload.clone()).await,
+        "/localgpt/prepare-turn-start" => localgpt::prepare_turn_start(payload.clone()).await,
         "/delete" => result_value(ctx.data.delete(session_from_payload(&payload)).await),
         "/undo" => {
             let undo_token = payload

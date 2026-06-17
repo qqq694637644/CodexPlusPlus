@@ -1796,6 +1796,28 @@
     window.__codexPlusDispatchMiddlewares = middlewares;
   }
 
+  function registerCodexPlusInboundMiddleware(name, handler) {
+    if (!name || typeof handler !== "function") throw new Error("Invalid inbound middleware");
+    const middlewares = Array.isArray(window.__codexPlusInboundMiddlewares) ? window.__codexPlusInboundMiddlewares : [];
+    if (middlewares.some((middleware) => middleware.name === name)) throw new Error(`Inbound middleware already registered: ${name}`);
+    middlewares.push({ name, handler });
+    window.__codexPlusInboundMiddlewares = middlewares;
+  }
+
+  function runCodexPlusInboundMiddlewares(event, finalHandle) {
+    const middlewares = Array.isArray(window.__codexPlusInboundMiddlewares) ? window.__codexPlusInboundMiddlewares : [];
+    const runAt = (index, currentEvent) => {
+      if (!currentEvent || typeof currentEvent !== "object") throw new Error("Inbound middleware returned invalid event");
+      if (index >= middlewares.length) return finalHandle(currentEvent);
+      const nextEvent = middlewares[index].handler(currentEvent);
+      if (nextEvent && typeof nextEvent.then === "function") {
+        return nextEvent.then((resolvedEvent) => runAt(index + 1, resolvedEvent));
+      }
+      return runAt(index + 1, nextEvent);
+    };
+    return runAt(0, event);
+  }
+
   function runCodexPlusDispatchMiddlewares(message, finalDispatch) {
     const middlewares = Array.isArray(window.__codexPlusDispatchMiddlewares) ? window.__codexPlusDispatchMiddlewares : [];
     const runAt = (index, currentMessage) => {
@@ -1811,6 +1833,7 @@
   }
 
   window.__codexPlusRegisterDispatchMiddleware = registerCodexPlusDispatchMiddleware;
+  window.__codexPlusRegisterInboundMiddleware = registerCodexPlusInboundMiddleware;
 
   function installCodexServiceTierDispatcherPatch() {
     if (window.__codexServiceTierRequestOverrideInstalled === codexServiceTierRequestOverrideVersion) return;
@@ -1818,18 +1841,28 @@
       try {
         const module = await loadCodexAppModule("vscode-api-");
         const dispatcher = module.f;
-        if (!dispatcher || typeof dispatcher.dispatchMessage !== "function") throw new Error("Codex dispatcher export unavailable: vscode-api-.f");
-        if (dispatcher.__codexServiceTierOriginalDispatchMessage) {
+        if (!dispatcher || typeof dispatcher.dispatchMessage !== "function") throw new Error("Codex dispatcher dispatchMessage unavailable: vscode-api-.f");
+        if (typeof dispatcher.handleMessage !== "function") throw new Error("Codex dispatcher handleMessage unavailable: vscode-api-.f");
+        const hasDispatchPatch = !!dispatcher.__codexServiceTierOriginalDispatchMessage;
+        const hasInboundPatch = !!dispatcher.__codexServiceTierOriginalHandleMessage;
+        if (hasDispatchPatch || hasInboundPatch) {
+          if (!hasDispatchPatch || !hasInboundPatch) throw new Error("Codex dispatcher patch state inconsistent");
           window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
           return;
         }
         dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);
+        dispatcher.__codexServiceTierOriginalHandleMessage = dispatcher.handleMessage.bind(dispatcher);
         dispatcher.dispatchMessage = (type, payload) => {
           const message = codexServiceTierRequestOverride({ ...(payload || {}), type });
           return runCodexPlusDispatchMiddlewares(message, (finalMessage) => {
             const nextType = finalMessage?.type || type;
             const { type: _type, ...nextPayload } = finalMessage || {};
             return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);
+          });
+        };
+        dispatcher.handleMessage = (event) => {
+          return runCodexPlusInboundMiddlewares(event, (finalEvent) => {
+            return dispatcher.__codexServiceTierOriginalHandleMessage(finalEvent);
           });
         };
         window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
