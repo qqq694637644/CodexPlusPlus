@@ -86,6 +86,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-deps-
 
+      - name: Cache Rust release build intermediates
+        uses: actions/cache@v4
+        with:
+          path: build/CodexPlusPlus-localgpt/target
+          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock', 'build/CodexPlusPlus-localgpt/**/Cargo.toml', 'build/CodexPlusPlus-localgpt/**/*.rs', 'localgpt/Cargo.toml', 'localgpt/src/**/*.rs', 'localgpt/templates/**', 'localgpt/config.json') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock', 'build/CodexPlusPlus-localgpt/**/Cargo.toml', 'localgpt/Cargo.toml') }}-
+            ${{ runner.os }}-cargo-target-release-
+
       - name: Install frontend dependencies
         working-directory: build/CodexPlusPlus-localgpt/apps/codex-plus-manager
         run: npm install --package-lock=false --prefer-offline --no-audit
@@ -96,6 +105,8 @@ jobs:
 
       - name: Build release binaries
         working-directory: build/CodexPlusPlus-localgpt
+        env:
+          CARGO_INCREMENTAL: "1"
         run: cargo build --release
 
       - name: Upload Windows binaries
