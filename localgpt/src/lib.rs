@@ -6,7 +6,7 @@ pub mod templates;
 
 use serde_json::Value;
 
-pub async fn handle_bridge(payload: Value) -> anyhow::Result<Value> {
+pub async fn handle_bridge(payload: Value) -> Value {
     bridge::handle_bridge(payload)
 }
 
