@@ -61,6 +61,7 @@ build/CodexPlusPlus-localgpt/
 
 localgpt/
   Cargo.toml
+  config.json
   src/
     lib.rs
     bridge.rs
@@ -80,6 +81,7 @@ localgpt/
 - `localgpt/` 是仓库根目录下的独立第三方模块
 - 不放进 `build/CodexPlusPlus-localgpt/crates/`
 - 目标是尽量不污染上游镜像目录；运行副本由脚本生成，方便后续持续同步 upstream
+- `localgpt/config.json` 显式声明业务路径，不从编译路径推导
 
 ---
 
@@ -183,6 +185,12 @@ localgpt/src/bootstrap.rs
 
 ## 6. 目录规则
 
+路径配置写在：
+
+```text
+localgpt/config.json
+```
+
 固定规则：
 
 ```text
@@ -197,12 +205,13 @@ WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\{threadId}
 - 不额外维护映射表
 - 不依赖内存状态
 - 重启后仍然稳定
+- 不使用 `env!("CARGO_MANIFEST_DIR")` 推导业务路径
 
 ---
 
 ## 7. 与 Codex++ 运行副本的最小集成点
 
-只改三处：
+运行副本只做最小接线改动：
 
 ### 7.1 增加 path dependency
 
@@ -302,6 +311,7 @@ build/CodexPlusPlus-localgpt/Cargo.lock
 build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/routes.rs
 build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/assets.rs
 build/CodexPlusPlus-localgpt/assets/inject/renderer-inject.js
+build/CodexPlusPlus-localgpt/crates/codex-plus-core/tests/model_catalog.rs
 ```
 
 其余 LocalGPT 代码全部留在：

@@ -72,6 +72,14 @@ WORKSPACE_ROOT = D:\repos\CodexPlusPlus\data
 WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\{threadId}
 ```
 
+这些路径来自：
+
+```text
+localgpt/config.json
+```
+
+不从编译时路径推导。
+
 规则：
 
 ```text

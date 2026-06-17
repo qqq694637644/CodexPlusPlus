@@ -27,6 +27,7 @@ def load_baseline() -> list[dict[str, str]]:
 
 
 def check_upstream_files(baseline_files: list[dict[str, str]]) -> None:
+    ensure_submodule_ready()
     changed: list[tuple[str, str, str, Path]] = []
     for item in baseline_files:
         relative_path = item["path"]
@@ -44,6 +45,17 @@ def check_upstream_files(baseline_files: list[dict[str, str]]) -> None:
             print(f"  baseline: {expected_sha}", file=sys.stderr)
             print(f"  current : {actual_sha}", file=sys.stderr)
         raise SystemExit(1)
+
+
+def ensure_submodule_ready() -> None:
+    marker = UPSTREAM_ROOT / ".git"
+    cargo_toml = UPSTREAM_ROOT / "Cargo.toml"
+    if marker.exists() and cargo_toml.is_file():
+        return
+    raise RuntimeError(
+        "upstream/CodexPlusPlus submodule 未初始化。"
+        "请先执行：git submodule update --init --recursive upstream/CodexPlusPlus"
+    )
 
 
 def reset_build_copy() -> None:
@@ -186,6 +198,75 @@ def patch_renderer_inject_js() -> None:
     )
     replace_exact_once(path, old_dispatch, new_dispatch)
 
+    old_upstream_worktree_patch = (
+        "  function installUpstreamPendingWorktreeDispatcherPatch() {\n"
+        "    const patchVersion = \"1\";\n"
+        "    if (window.__codexUpstreamPendingWorktreeDispatcherPatch === patchVersion) return;\n"
+        "    const patch = async () => {\n"
+        "      try {\n"
+        "        const module = await loadCodexAppModule(\"setting-storage-\");\n"
+        "        const dispatcherClass = typeof module.v === \"function\" && String(module.v).includes(\"dispatchMessage\") ? module.v : null;\n"
+        "        const dispatcher = dispatcherClass?.getInstance?.();\n"
+        "        if (!dispatcher || typeof dispatcher.dispatchMessage !== \"function\") throw new Error(\"Codex dispatcher unavailable\");\n"
+        "        if (!dispatcher.__codexUpstreamWorktreeOriginalDispatchMessage) {\n"
+        "          dispatcher.__codexUpstreamWorktreeOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);\n"
+        "          dispatcher.dispatchMessage = (type, payload) => {\n"
+        "            const nextPayload = type === \"pending-worktree-create\"\n"
+        "              ? applyUpstreamPendingWorktreeOverride(payload)\n"
+        "              : payload;\n"
+        "            return dispatcher.__codexUpstreamWorktreeOriginalDispatchMessage(type, nextPayload);\n"
+        "          };\n"
+        "        }\n"
+        "        window.__codexUpstreamPendingWorktreeDispatcherPatch = patchVersion;\n"
+        "      } catch (error) {\n"
+        "        sendCodexPlusDiagnostic(\"upstream_pending_worktree_patch_failed\", {\n"
+        "          errorName: error?.name || \"\",\n"
+        "          errorMessage: error?.message || String(error),\n"
+        "        });\n"
+        "      }\n"
+        "    };\n"
+        "    void patch();\n"
+        "  }\n"
+    )
+    new_upstream_worktree_patch = (
+        "  function installUpstreamPendingWorktreeDispatcherPatch() {\n"
+        "    const patchVersion = \"2\";\n"
+        "    if (window.__codexUpstreamPendingWorktreeDispatcherPatch === patchVersion) return;\n"
+        "    try {\n"
+        "      registerCodexPlusDispatchMiddleware(\"upstream-pending-worktree\", (message) => {\n"
+        "        if (message?.type !== \"pending-worktree-create\") return message;\n"
+        "        const { type: _type, ...payload } = message;\n"
+        "        const nextPayload = applyUpstreamPendingWorktreeOverride(payload);\n"
+        "        return { ...(nextPayload || {}), type: \"pending-worktree-create\" };\n"
+        "      });\n"
+        "      window.__codexUpstreamPendingWorktreeDispatcherPatch = patchVersion;\n"
+        "    } catch (error) {\n"
+        "      sendCodexPlusDiagnostic(\"upstream_pending_worktree_patch_failed\", {\n"
+        "        errorName: error?.name || \"\",\n"
+        "        errorMessage: error?.message || String(error),\n"
+        "      });\n"
+        "      throw error;\n"
+        "    }\n"
+        "  }\n"
+    )
+    replace_exact_once(path, old_upstream_worktree_patch, new_upstream_worktree_patch)
+
+
+def patch_model_catalog_rs() -> None:
+    path = BUILD_ROOT / "crates" / "codex-plus-core" / "tests" / "model_catalog.rs"
+    old = (
+        '                    relay_mode: RelayMode::PureApi,\n'
+        '                    model_list: "deepseek-coder\\nqwen3-coder\\nclaude-compatible".to_string(),\n'
+        '                    config_contents: "model = \\"qwen3-coder\\"\\n".to_string(),\n'
+        '                    relay_mode: codex_plus_core::settings::RelayMode::MixedApi,\n'
+    )
+    new = (
+        '                    relay_mode: RelayMode::MixedApi,\n'
+        '                    model_list: "deepseek-coder\\nqwen3-coder\\nclaude-compatible".to_string(),\n'
+        '                    config_contents: "model = \\"qwen3-coder\\"\\n".to_string(),\n'
+    )
+    replace_exact_once(path, old, new)
+
 
 def patch_assets_rs() -> None:
     path = BUILD_ROOT / "crates" / "codex-plus-core" / "src" / "assets.rs"
@@ -221,6 +302,7 @@ def main() -> None:
     patch_cargo_lock()
     patch_routes_rs()
     patch_renderer_inject_js()
+    patch_model_catalog_rs()
     patch_assets_rs()
     print(f"副本已生成：{BUILD_ROOT}")
 

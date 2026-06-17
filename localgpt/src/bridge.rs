@@ -32,10 +32,10 @@ pub fn handle_bridge(payload: Value) -> anyhow::Result<Value> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("turn/start 缺少 cwd"))?;
 
-    let source_cwd = paths::source_cwd();
+    let source_cwd = paths::source_cwd()?;
     let incoming_cwd = Path::new(cwd);
 
-    if !paths::same_path(incoming_cwd, &source_cwd)? {
+    if !paths::is_source_cwd(incoming_cwd)? {
         return Ok(json!({
             "action": "passthrough",
             "threadId": thread_id,
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_thread_id() {
-        let payload = json!({ "cwd": paths::display_path(&paths::source_cwd()) });
+        let payload = json!({ "cwd": paths::display_path(&paths::source_cwd().unwrap()) });
         assert!(handle_bridge(payload).is_err());
     }
 
@@ -69,8 +69,18 @@ mod tests {
     fn rejects_invalid_thread_id() {
         let payload = json!({
             "threadId": "../bad",
-            "cwd": paths::display_path(&paths::source_cwd()),
+            "cwd": paths::display_path(&paths::source_cwd().unwrap()),
         });
         assert!(handle_bridge(payload).is_err());
+    }
+
+    #[test]
+    fn non_existing_cwd_passthrough() {
+        let payload = json!({
+            "threadId": "thread-ok",
+            "cwd": "Z:\\this\\path\\should\\not\\exist\\localgpt",
+        });
+        let result = handle_bridge(payload).unwrap();
+        assert_eq!(result["action"], "passthrough");
     }
 }

@@ -1,27 +1,22 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
-pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("localgpt 应位于仓库根目录下")
-        .to_path_buf()
+use crate::config;
+
+pub fn source_cwd() -> Result<PathBuf> {
+    Ok(config::load()?.source_cwd)
 }
 
-pub fn source_cwd() -> PathBuf {
-    repo_root()
-}
-
-pub fn workspace_root() -> PathBuf {
-    repo_root().join("data")
+pub fn workspace_root() -> Result<PathBuf> {
+    Ok(config::load()?.workspace_root)
 }
 
 pub fn workspace_path(thread_id: &str) -> Result<PathBuf> {
     validate_thread_id(thread_id)?;
-    Ok(workspace_root().join(thread_id))
+    Ok(workspace_root()?.join(thread_id))
 }
 
-pub fn path_key(path: &Path) -> Result<String> {
+pub fn existing_path_key(path: &Path) -> Result<String> {
     let canonical = path.canonicalize()?;
     let mut value = canonical.to_string_lossy().replace('/', "\\");
     if let Some(stripped) = value.strip_prefix(r"\\?\") {
@@ -37,8 +32,18 @@ pub fn path_key(path: &Path) -> Result<String> {
     Ok(value)
 }
 
-pub fn same_path(left: &Path, right: &Path) -> Result<bool> {
-    Ok(path_key(left)? == path_key(right)?)
+pub fn same_existing_path(left: &Path, right: &Path) -> Result<bool> {
+    Ok(existing_path_key(left)? == existing_path_key(right)?)
+}
+
+pub fn is_source_cwd(path: &Path) -> Result<bool> {
+    let source = source_cwd()?;
+    let source_key = existing_path_key(&source)?;
+    let incoming_key = match existing_path_key(path) {
+        Ok(value) => value,
+        Err(_) => return Ok(false),
+    };
+    Ok(incoming_key == source_key)
 }
 
 pub fn display_path(path: &Path) -> String {

@@ -5967,32 +5967,23 @@
   }
 
   function installUpstreamPendingWorktreeDispatcherPatch() {
-    const patchVersion = "1";
+    const patchVersion = "2";
     if (window.__codexUpstreamPendingWorktreeDispatcherPatch === patchVersion) return;
-    const patch = async () => {
-      try {
-        const module = await loadCodexAppModule("setting-storage-");
-        const dispatcherClass = typeof module.v === "function" && String(module.v).includes("dispatchMessage") ? module.v : null;
-        const dispatcher = dispatcherClass?.getInstance?.();
-        if (!dispatcher || typeof dispatcher.dispatchMessage !== "function") throw new Error("Codex dispatcher unavailable");
-        if (!dispatcher.__codexUpstreamWorktreeOriginalDispatchMessage) {
-          dispatcher.__codexUpstreamWorktreeOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);
-          dispatcher.dispatchMessage = (type, payload) => {
-            const nextPayload = type === "pending-worktree-create"
-              ? applyUpstreamPendingWorktreeOverride(payload)
-              : payload;
-            return dispatcher.__codexUpstreamWorktreeOriginalDispatchMessage(type, nextPayload);
-          };
-        }
-        window.__codexUpstreamPendingWorktreeDispatcherPatch = patchVersion;
-      } catch (error) {
-        sendCodexPlusDiagnostic("upstream_pending_worktree_patch_failed", {
-          errorName: error?.name || "",
-          errorMessage: error?.message || String(error),
-        });
-      }
-    };
-    void patch();
+    try {
+      registerCodexPlusDispatchMiddleware("upstream-pending-worktree", (message) => {
+        if (message?.type !== "pending-worktree-create") return message;
+        const { type: _type, ...payload } = message;
+        const nextPayload = applyUpstreamPendingWorktreeOverride(payload);
+        return { ...(nextPayload || {}), type: "pending-worktree-create" };
+      });
+      window.__codexUpstreamPendingWorktreeDispatcherPatch = patchVersion;
+    } catch (error) {
+      sendCodexPlusDiagnostic("upstream_pending_worktree_patch_failed", {
+        errorName: error?.name || "",
+        errorMessage: error?.message || String(error),
+      });
+      throw error;
+    }
   }
 
   function upstreamWorktreeNativePayloadFromElement(element) {
