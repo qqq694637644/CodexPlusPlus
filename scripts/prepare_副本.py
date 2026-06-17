@@ -53,6 +53,15 @@ def reset_build_copy() -> None:
         shutil.rmtree(BUILD_ROOT)
     BUILD_ROOT.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(UPSTREAM_ROOT, BUILD_ROOT)
+    remove_embedded_git_metadata()
+
+
+def remove_embedded_git_metadata() -> None:
+    git_metadata = BUILD_ROOT / ".git"
+    if git_metadata.is_file() or git_metadata.is_symlink():
+        git_metadata.unlink()
+    elif git_metadata.is_dir():
+        shutil.rmtree(git_metadata)
 
 
 def replace_exact_once(path: Path, old: str, new: str) -> None:
