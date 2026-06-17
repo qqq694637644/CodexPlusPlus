@@ -72,14 +72,16 @@ WORKSPACE_ROOT = D:\repos\CodexPlusPlus\data
 WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\{threadId}
 ```
 
-这些路径来自编译时 `CARGO_MANIFEST_DIR`：
+这些路径写死在 `localgpt/config.json`，并通过 `include_str!` 编译进二进制：
 
-```text
-SOURCE_CWD     = parent(CARGO_MANIFEST_DIR)
-WORKSPACE_ROOT = SOURCE_CWD\data
+```json
+{
+  "source_cwd": "D:\\repos\\CodexPlusPlus",
+  "workspace_root": "D:\\repos\\CodexPlusPlus\\data"
+}
 ```
 
-注意：修改 `localgpt` 所在位置后必须重新编译运行副本才会生效。
+注意：修改 `localgpt/config.json` 后必须重新编译运行副本才会生效。
 
 规则：
 
@@ -356,4 +358,5 @@ workspace 缺失或创建失败时
 不会回退原目录执行
 而是直接取消本次 turn/start
 ```
+
 
