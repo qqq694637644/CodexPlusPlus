@@ -16,22 +16,14 @@ struct PrepareTurnStartRequest {
     input: Option<Value>,
 }
 
-pub fn handle_bridge(payload: Value) -> Value {
+pub fn handle_bridge(payload: Value) -> anyhow::Result<Value> {
     log::append("bridge.request", json!({ "payload": payload.clone() }));
-    match handle_bridge_inner(payload) {
-        Ok(value) => {
-            log::append("bridge.response", json!({ "result": value.clone() }));
-            value
-        }
-        Err(error) => {
-            let result = json!({
-                "action": "error",
-                "message": error.to_string(),
-            });
-            log::append("bridge.error", json!({ "result": result.clone() }));
-            result
-        }
+    let result = handle_bridge_inner(payload);
+    match &result {
+        Ok(value) => log::append("bridge.response", json!({ "result": value.clone() })),
+        Err(error) => log::append("bridge.error", json!({ "message": error.to_string() })),
     }
+    result
 }
 
 fn handle_bridge_inner(payload: Value) -> anyhow::Result<Value> {
