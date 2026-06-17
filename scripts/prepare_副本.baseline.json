@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "key": "cargo_toml",
+      "path": "upstream/CodexPlusPlus/crates/codex-plus-core/Cargo.toml",
+      "sha256": "aac5bea4546dd5a1c9af0f49adf0aa4100c36d125f8e0df30ba0db614f465027"
+    },
+    {
+      "key": "routes_rs",
+      "path": "upstream/CodexPlusPlus/crates/codex-plus-core/src/routes.rs",
+      "sha256": "48c51d6810fa449e253f3980320a8524944f7503ca1dd4d7eec8ab4b3d0e5091"
+    },
+    {
+      "key": "assets_rs",
+      "path": "upstream/CodexPlusPlus/crates/codex-plus-core/src/assets.rs",
+      "sha256": "0041dfe299a3da928cf4a896035b63ab4e909d042a30f742f91b15e3be2ac221"
+    }
+  ]
+}

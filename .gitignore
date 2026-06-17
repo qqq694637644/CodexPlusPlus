@@ -3,7 +3,6 @@ __pycache__/
 venv/
 .worktrees/
 *.egg-info/
-build/
 dist/
 target/
 apps/codex-plus-manager/src-tauri/gen/

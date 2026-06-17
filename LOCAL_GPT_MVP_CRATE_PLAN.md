@@ -52,10 +52,10 @@
 
 目标是尽量不和上游大面积耦合。
 
-建议目录：
+目录：
 
 ```text
-upstream/CodexPlusPlus/
+build/CodexPlusPlus-localgpt/
   crates/
 
 
@@ -78,8 +78,8 @@ localgpt/
 说明：
 
 - `localgpt/` 是仓库根目录下的独立第三方模块
-- 不放进 `upstream/CodexPlusPlus/crates/`
-- 目标是尽量不污染上游目录结构，方便后续持续同步 upstream
+- 不放进 `build/CodexPlusPlus-localgpt/crates/`
+- 目标是尽量不污染上游镜像目录；运行副本由脚本生成，方便后续持续同步 upstream
 
 ---
 
@@ -156,7 +156,7 @@ localgpt/src/bridge.rs
 ```json
 {
   "action": "rewrite",
-  "cwd": "D:\\repos\\CodexPlusPlus\\data\\threadId"
+  "cwd": "D:\\repos\\CodexPlusPlus\\data\\{threadId}"
 }
 ```
 
@@ -173,7 +173,7 @@ localgpt/src/bootstrap.rs
 职责：
 
 1. 判断是否命中源目录
-2. 根据 `threadId` 计算固定 workspace
+2. 根据 `{threadId}` 计算固定 workspace
 3. 目标目录不存在时创建
 4. 写入 `AGENTS.md`
 5. 复制 `.agents\skills`
@@ -188,19 +188,19 @@ localgpt/src/bootstrap.rs
 ```text
 SOURCE_CWD     = D:\repos\CodexPlusPlus
 WORKSPACE_ROOT = D:\repos\CodexPlusPlus\data
-WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\threadId
+WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\{threadId}
 ```
 
 规则含义：
 
-- 同一个 `threadId` 永远映射到同一个目录
+- 同一个 `{threadId}` 永远映射到同一个目录
 - 不额外维护映射表
 - 不依赖内存状态
 - 重启后仍然稳定
 
 ---
 
-## 7. 与上游的最小集成点
+## 7. 与 Codex++ 运行副本的最小集成点
 
 只改三处：
 
@@ -209,28 +209,28 @@ WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\threadId
 修改：
 
 ```text
-upstream/CodexPlusPlus/crates/codex-plus-core/Cargo.toml
+build/CodexPlusPlus-localgpt/crates/codex-plus-core/Cargo.toml
 ```
 
 增加：
 
 ```toml
-localgpt = { path = "../../../localgpt" }
+localgpt = { path = "../../../../localgpt" }
 ```
 
 说明：
 
-- 不把 `localgpt/` 放进上游 workspace
-- 不改上游根 `Cargo.toml` 的 members
+- 不把 `localgpt/` 放进副本 workspace
+- 不改副本根 `Cargo.toml` 的 members
 - 只让 `codex-plus-core` 通过相对路径依赖它
-- 这样同步 upstream 时冲突最小
+- 这样运行副本可重复生成，upstream 镜像不需要保留这些改动
 
 ### 7.2 增加一个 bridge route
 
 修改：
 
 ```text
-upstream/CodexPlusPlus/crates/codex-plus-core/src/routes.rs
+build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/routes.rs
 ```
 
 在现有 route 分发中新增：
@@ -241,7 +241,7 @@ upstream/CodexPlusPlus/crates/codex-plus-core/src/routes.rs
 
 然后把处理转给 `localgpt` crate。
 
-建议形式：
+形式：
 
 ```rust
 "/localgpt/prepare-turn-start" => localgpt::handle_bridge(payload.clone()).await,
@@ -252,7 +252,7 @@ upstream/CodexPlusPlus/crates/codex-plus-core/src/routes.rs
 修改：
 
 ```text
-upstream/CodexPlusPlus/crates/codex-plus-core/src/assets.rs
+build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/assets.rs
 ```
 
 在现有注入脚本输出时，额外追加：
@@ -263,7 +263,7 @@ localgpt turn_start_hook.js
 
 避免把 LocalGPT 逻辑硬塞进现有大脚本。
 
-建议形式：
+形式：
 
 ```rust
 format!(
@@ -274,14 +274,14 @@ format!(
 
 ---
 
-## 7.4 上游最小改动清单
+## 7.4 运行副本最小改动清单
 
-最终只动这几个上游文件：
+最终只动这几个运行副本文件：
 
 ```text
-upstream/CodexPlusPlus/crates/codex-plus-core/Cargo.toml
-upstream/CodexPlusPlus/crates/codex-plus-core/src/routes.rs
-upstream/CodexPlusPlus/crates/codex-plus-core/src/assets.rs
+build/CodexPlusPlus-localgpt/crates/codex-plus-core/Cargo.toml
+build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/routes.rs
+build/CodexPlusPlus-localgpt/crates/codex-plus-core/src/assets.rs
 ```
 
 其余 LocalGPT 代码全部留在：
@@ -290,7 +290,7 @@ upstream/CodexPlusPlus/crates/codex-plus-core/src/assets.rs
 localgpt/
 ```
 
-这就是本方案最核心的“低耦合”要求。
+这就是本方案最核心的“低耦合”和“不污染 upstream 镜像”要求。
 
 ---
 
@@ -348,7 +348,7 @@ localgpt/
 
 1. 当 `cwd == D:\repos\CodexPlusPlus` 时：
    - 本次 `turn/start` 被改写到
-     `D:\repos\CodexPlusPlus\data\threadId`
+     `D:\repos\CodexPlusPlus\data\{threadId}`
 2. 同一 `threadId` 后续再次请求时：
    - 仍然改写到同一目录
 3. 当 `cwd != D:\repos\CodexPlusPlus` 时：
@@ -373,3 +373,4 @@ localgpt/
 - Platform Gateway
 
 当前一律不做。
+
