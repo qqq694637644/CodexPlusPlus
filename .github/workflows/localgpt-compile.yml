@@ -90,10 +90,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/CodexPlusPlus-localgpt/target
-          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock', 'build/CodexPlusPlus-localgpt/**/Cargo.toml', 'build/CodexPlusPlus-localgpt/**/*.rs', 'localgpt/Cargo.toml', 'localgpt/src/**/*.rs', 'localgpt/templates/**', 'localgpt/config.json') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock', 'build/CodexPlusPlus-localgpt/**/Cargo.toml', 'localgpt/Cargo.toml') }}-
-            ${{ runner.os }}-cargo-target-release-
+          key: ${{ runner.os }}-cargo-target-release-${{ hashFiles('build/CodexPlusPlus-localgpt/Cargo.lock') }}
 
       - name: Install frontend dependencies
         working-directory: build/CodexPlusPlus-localgpt/apps/codex-plus-manager
