@@ -24,11 +24,6 @@
       "key": "renderer_inject_js",
       "path": "upstream/CodexPlusPlus/assets/inject/renderer-inject.js",
       "sha256": "df7d60e60f709acb201d70b6ed2fcde616ad38d82540d2554ad558a286c3afa2"
-    },
-    {
-      "key": "model_catalog_rs",
-      "path": "upstream/CodexPlusPlus/crates/codex-plus-core/tests/model_catalog.rs",
-      "sha256": "b936943c5537d74ed9a919beba5d89f84661727977dd59ed890568c7669c17ec"
     }
   ]
 }

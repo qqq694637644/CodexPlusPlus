@@ -4,19 +4,25 @@ on:
   pull_request:
     paths:
       - ".github/workflows/localgpt-compile.yml"
+      - "scripts/prepare_副本.py"
+      - "scripts/prepare_副本.baseline.json"
       - "scripts/ci_windows_target_cache.py"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
       - "build/CodexPlusPlus-localgpt/Cargo.lock"
+      - "build/CodexPlusPlus-localgpt/assets/inject/renderer-inject.js"
       - "build/CodexPlusPlus-localgpt/crates/codex-plus-core/**"
   push:
     branches: [main]
     paths:
       - ".github/workflows/localgpt-compile.yml"
+      - "scripts/prepare_副本.py"
+      - "scripts/prepare_副本.baseline.json"
       - "scripts/ci_windows_target_cache.py"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
       - "build/CodexPlusPlus-localgpt/Cargo.lock"
+      - "build/CodexPlusPlus-localgpt/assets/inject/renderer-inject.js"
       - "build/CodexPlusPlus-localgpt/crates/codex-plus-core/**"
   workflow_dispatch:
 
@@ -48,7 +54,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Check codex-plus-core with LocalGPT path dependency
-        run: cargo check --manifest-path build/CodexPlusPlus-localgpt/Cargo.toml -p codex-plus-core
+        run: cargo check --manifest-path build/CodexPlusPlus-localgpt/Cargo.toml -p codex-plus-core --all-targets
 
   windows-artifacts:
     name: Windows artifacts
