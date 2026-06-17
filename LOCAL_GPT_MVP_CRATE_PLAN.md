@@ -90,7 +90,7 @@ localgpt/
 文件：
 
 ```text
-crates/localgpt/js/turn_start_hook.js
+localgpt/js/turn_start_hook.js
 ```
 
 职责：
@@ -126,7 +126,7 @@ JS 不负责：
 文件：
 
 ```text
-crates/localgpt/src/bridge.rs
+localgpt/src/bridge.rs
 ```
 
 职责：
@@ -167,7 +167,7 @@ crates/localgpt/src/bridge.rs
 文件：
 
 ```text
-crates/localgpt/src/bootstrap.rs
+localgpt/src/bootstrap.rs
 ```
 
 职责：
@@ -204,11 +204,34 @@ WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\threadId
 
 只改三处：
 
-### 7.1 加入 workspace
+### 7.1 增加 path dependency
 
-把仓库根目录下的 `localgpt` 作为 path dependency 接入上游。
+修改：
+
+```text
+upstream/CodexPlusPlus/crates/codex-plus-core/Cargo.toml
+```
+
+增加：
+
+```toml
+localgpt = { path = "../../../localgpt" }
+```
+
+说明：
+
+- 不把 `localgpt/` 放进上游 workspace
+- 不改上游根 `Cargo.toml` 的 members
+- 只让 `codex-plus-core` 通过相对路径依赖它
+- 这样同步 upstream 时冲突最小
 
 ### 7.2 增加一个 bridge route
+
+修改：
+
+```text
+upstream/CodexPlusPlus/crates/codex-plus-core/src/routes.rs
+```
 
 在现有 route 分发中新增：
 
@@ -218,7 +241,19 @@ WORKSPACE_PATH = D:\repos\CodexPlusPlus\data\threadId
 
 然后把处理转给 `localgpt` crate。
 
+建议形式：
+
+```rust
+"/localgpt/prepare-turn-start" => localgpt::handle_bridge(payload.clone()).await,
+```
+
 ### 7.3 追加 hook 脚本
+
+修改：
+
+```text
+upstream/CodexPlusPlus/crates/codex-plus-core/src/assets.rs
+```
 
 在现有注入脚本输出时，额外追加：
 
@@ -227,6 +262,35 @@ localgpt turn_start_hook.js
 ```
 
 避免把 LocalGPT 逻辑硬塞进现有大脚本。
+
+建议形式：
+
+```rust
+format!(
+    "...现有注入内容...\n{}",
+    localgpt::hook_script()
+)
+```
+
+---
+
+## 7.4 上游最小改动清单
+
+最终只动这几个上游文件：
+
+```text
+upstream/CodexPlusPlus/crates/codex-plus-core/Cargo.toml
+upstream/CodexPlusPlus/crates/codex-plus-core/src/routes.rs
+upstream/CodexPlusPlus/crates/codex-plus-core/src/assets.rs
+```
+
+其余 LocalGPT 代码全部留在：
+
+```text
+localgpt/
+```
+
+这就是本方案最核心的“低耦合”要求。
 
 ---
 
