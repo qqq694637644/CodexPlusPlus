@@ -43,9 +43,10 @@ pub fn prepare_thread_start(payload: Value) -> Result<Value> {
         }));
     }
 
+    let inherited_path = inherited_path()?;
     let workspace = bootstrap::create_workspace_for_thread_start()?;
     let venv_scripts = paths::display_path(&workspace.venv_scripts);
-    let next_path = path_with_venv_scripts(&venv_scripts)?;
+    let next_path = path_with_venv_scripts(&venv_scripts, &inherited_path);
 
     Ok(json!({
         "action": "rewrite",
@@ -110,9 +111,8 @@ pub fn prepare_turn_start(payload: Value) -> Result<Value> {
     }))
 }
 
-fn path_with_venv_scripts(venv_scripts: &str) -> Result<String> {
-    let inherited_path = inherited_path()?;
-    Ok(format!("{};{}", venv_scripts, inherited_path))
+fn path_with_venv_scripts(venv_scripts: &str, inherited_path: &str) -> String {
+    format!("{};{}", venv_scripts, inherited_path)
 }
 
 fn inherited_path() -> Result<String> {
@@ -179,7 +179,13 @@ mod tests {
 
     #[test]
     fn path_with_venv_scripts_keeps_original_path() {
-        let value = path_with_venv_scripts(r"D:\repo\data\localgpt-x\.venv\Scripts").unwrap();
-        assert!(value.starts_with(r"D:\repo\data\localgpt-x\.venv\Scripts;"));
+        let value = path_with_venv_scripts(
+            r"D:\repo\data\localgpt-x\.venv\Scripts",
+            r"C:\Windows\System32",
+        );
+        assert_eq!(
+            value,
+            r"D:\repo\data\localgpt-x\.venv\Scripts;C:\Windows\System32"
+        );
     }
 }

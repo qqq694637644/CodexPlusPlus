@@ -43,7 +43,9 @@ pub fn bootstrap_new_workspace(workspace_id: &str) -> Result<WorkspaceInfo> {
         bail!("workspace 已存在，拒绝复用或补救：{}", workspace.display());
     }
 
-    bootstrap_workspace_transactionally(&workspace)?;
+    bootstrap_workspace_skeleton_transactionally(&workspace)?;
+    create_python_venv(&venv)?;
+    validate_existing_workspace(&workspace)?;
 
     Ok(WorkspaceInfo {
         workspace_id: workspace_id.to_string(),
@@ -53,7 +55,7 @@ pub fn bootstrap_new_workspace(workspace_id: &str) -> Result<WorkspaceInfo> {
     })
 }
 
-fn bootstrap_workspace_transactionally(workspace: &Path) -> Result<()> {
+fn bootstrap_workspace_skeleton_transactionally(workspace: &Path) -> Result<()> {
     templates::validate()?;
     let temp_workspace = temp_workspace_path(workspace)?;
     if temp_workspace.exists() {
@@ -67,8 +69,8 @@ fn bootstrap_workspace_transactionally(workspace: &Path) -> Result<()> {
             .with_context(|| format!("创建 workspace 父目录失败：{}", parent.display()))?;
     }
 
-    bootstrap_workspace_contents(&temp_workspace)?;
-    validate_existing_workspace(&temp_workspace)?;
+    bootstrap_workspace_skeleton_contents(&temp_workspace)?;
+    validate_workspace_skeleton(&temp_workspace)?;
     fs::rename(&temp_workspace, workspace).with_context(|| {
         format!(
             "提交 workspace 初始化失败：{} -> {}",
@@ -80,7 +82,7 @@ fn bootstrap_workspace_transactionally(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-fn bootstrap_workspace_contents(workspace: &Path) -> Result<()> {
+fn bootstrap_workspace_skeleton_contents(workspace: &Path) -> Result<()> {
     fs::create_dir_all(workspace)
         .with_context(|| format!("创建 workspace 目录失败：{}", workspace.display()))?;
 
@@ -89,7 +91,6 @@ fn bootstrap_workspace_contents(workspace: &Path) -> Result<()> {
         .with_context(|| format!("复制 AGENTS.md 失败：{}", agents_path.display()))?;
 
     copy_dir(&templates::skills_dir()?, &workspace.join(".agents").join("skills"))?;
-    create_python_venv(&workspace.join(".venv"))?;
 
     Ok(())
 }
@@ -117,19 +118,9 @@ fn create_python_venv(venv_path: &Path) -> Result<()> {
 }
 
 pub fn validate_existing_workspace(workspace: &Path) -> Result<()> {
-    if !workspace.is_dir() {
-        bail!("workspace 不是目录：{}", workspace.display());
-    }
-    let agents_path = workspace.join("AGENTS.md");
-    let skills_target = workspace.join(".agents").join("skills");
+    validate_workspace_skeleton(workspace)?;
     let venv_target = workspace.join(".venv");
     let venv_scripts_target = venv_target.join("Scripts");
-    if !agents_path.is_file() {
-        bail!("workspace 缺少 AGENTS.md：{}", agents_path.display());
-    }
-    if !skills_target.is_dir() {
-        bail!("workspace 缺少 skills 目录：{}", skills_target.display());
-    }
     if !venv_target.is_dir() {
         bail!("workspace 缺少 .venv 目录：{}", venv_target.display());
     }
@@ -138,6 +129,21 @@ pub fn validate_existing_workspace(workspace: &Path) -> Result<()> {
             "workspace 缺少 .venv\\Scripts 目录：{}",
             venv_scripts_target.display()
         );
+    }
+    Ok(())
+}
+
+fn validate_workspace_skeleton(workspace: &Path) -> Result<()> {
+    if !workspace.is_dir() {
+        bail!("workspace 不是目录：{}", workspace.display());
+    }
+    let agents_path = workspace.join("AGENTS.md");
+    let skills_target = workspace.join(".agents").join("skills");
+    if !agents_path.is_file() {
+        bail!("workspace 缺少 AGENTS.md：{}", agents_path.display());
+    }
+    if !skills_target.is_dir() {
+        bail!("workspace 缺少 skills 目录：{}", skills_target.display());
     }
     Ok(())
 }

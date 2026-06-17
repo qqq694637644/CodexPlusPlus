@@ -321,9 +321,11 @@ pub struct WorkspaceInfo {
 data\.localgpt-{uuid}.tmp\
   AGENTS.md
   .agents\skills\
-  .venv\
 
 rename -> data\localgpt-{uuid}
+
+在最终 workspace 路径创建真实 venv：
+python -m venv data\localgpt-{uuid}\.venv
 ```
 
 最小校验：
@@ -344,19 +346,13 @@ Fail Fast 规则：
 
 `.venv` 阶段策略：
 
-MVP 可以先只创建目录：
-
-```text
-.venv\
-```
-
-如果要创建真实 Python venv，只做明确实现：
+创建真实 Python venv，只做明确实现：
 
 ```text
 python -m venv {workspace}\.venv
 ```
 
-不要自动搜索多个 Python，不要兜底兼容。找不到 `python` 就 fail fast。
+必须在 rename 到最终 workspace 之后再执行，不能在临时目录创建 venv 后移动。不要自动搜索多个 Python，不要兜底兼容。找不到 `python` 就 fail fast。venv 创建失败时整个 `prepare-thread-start` 失败，不写入 `localgpt-state.json`。
 
 ### 6.6 `state.rs`
 
@@ -422,9 +418,9 @@ localgpt-state.json.tmp -> localgpt-state.json
 1. 校验 requestId 非空。
 2. 校验 cwd 非空。
 3. 如果 cwd != source_cwd：返回 passthrough。
-4. 生成 workspaceId = localgpt-{uuid}。
-5. 调 bootstrap_new_workspace(workspaceId)。
-6. 读取 Codex++ 后端进程环境里的原 PATH。
+4. 读取 Codex++ 后端进程环境里的原 PATH；读取失败直接 fail fast，不能创建孤儿 workspace。
+5. 生成 workspaceId = localgpt-{uuid}。
+6. 调 bootstrap_new_workspace(workspaceId)。
 7. 生成 path = venvScripts + ";" + 原 PATH。
 8. 返回 rewrite 信息。
 ```
