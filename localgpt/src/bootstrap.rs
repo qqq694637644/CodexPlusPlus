@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
@@ -16,21 +17,23 @@ unsafe extern "system" {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedWorkspace {
+pub struct WorkspaceInfo {
     pub workspace_id: String,
-    pub workspace_path: PathBuf,
-    pub venv_path: PathBuf,
+    pub workspace: PathBuf,
+    pub venv: PathBuf,
+    pub venv_scripts: PathBuf,
 }
 
-pub fn create_workspace_for_thread_start() -> Result<PreparedWorkspace> {
+pub fn create_workspace_for_thread_start() -> Result<WorkspaceInfo> {
     let workspace_id = format!("{}{}", paths::WORKSPACE_ID_PREFIX, uuid_v4()?);
-    create_workspace(&workspace_id)
+    bootstrap_new_workspace(&workspace_id)
 }
 
-pub fn create_workspace(workspace_id: &str) -> Result<PreparedWorkspace> {
+pub fn bootstrap_new_workspace(workspace_id: &str) -> Result<WorkspaceInfo> {
     paths::validate_workspace_id(workspace_id)?;
     let workspace = paths::workspace_path(workspace_id)?;
     let venv = paths::venv_path(workspace_id)?;
+    let venv_scripts = paths::venv_scripts_path(workspace_id)?;
     let source_root = paths::source_cwd()?;
 
     if paths::same_path_key(&workspace, &source_root) {
@@ -40,16 +43,17 @@ pub fn create_workspace(workspace_id: &str) -> Result<PreparedWorkspace> {
         bail!("workspace 已存在，拒绝复用或补救：{}", workspace.display());
     }
 
-    bootstrap_new_workspace(&workspace)?;
+    bootstrap_workspace_transactionally(&workspace)?;
 
-    Ok(PreparedWorkspace {
+    Ok(WorkspaceInfo {
         workspace_id: workspace_id.to_string(),
-        workspace_path: workspace,
-        venv_path: venv,
+        workspace,
+        venv,
+        venv_scripts,
     })
 }
 
-fn bootstrap_new_workspace(workspace: &Path) -> Result<()> {
+fn bootstrap_workspace_transactionally(workspace: &Path) -> Result<()> {
     templates::validate()?;
     let temp_workspace = temp_workspace_path(workspace)?;
     if temp_workspace.exists() {
@@ -85,10 +89,29 @@ fn bootstrap_workspace_contents(workspace: &Path) -> Result<()> {
         .with_context(|| format!("复制 AGENTS.md 失败：{}", agents_path.display()))?;
 
     copy_dir(&templates::skills_dir()?, &workspace.join(".agents").join("skills"))?;
+    create_python_venv(&workspace.join(".venv"))?;
 
-    let venv_path = workspace.join(".venv");
-    fs::create_dir_all(&venv_path)
-        .with_context(|| format!("创建 .venv 目录失败：{}", venv_path.display()))?;
+    Ok(())
+}
+
+fn create_python_venv(venv_path: &Path) -> Result<()> {
+    let output = Command::new("python")
+        .arg("-m")
+        .arg("venv")
+        .arg(venv_path)
+        .output()
+        .with_context(|| "执行 python -m venv 失败：找不到 python 或无法启动".to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        bail!(
+            "创建 Python venv 失败：{}{}{}",
+            venv_path.display(),
+            if stderr.is_empty() { "" } else { "；stderr: " },
+            if stderr.is_empty() { stdout } else { stderr }
+        );
+    }
 
     Ok(())
 }
@@ -100,6 +123,7 @@ pub fn validate_existing_workspace(workspace: &Path) -> Result<()> {
     let agents_path = workspace.join("AGENTS.md");
     let skills_target = workspace.join(".agents").join("skills");
     let venv_target = workspace.join(".venv");
+    let venv_scripts_target = venv_target.join("Scripts");
     if !agents_path.is_file() {
         bail!("workspace 缺少 AGENTS.md：{}", agents_path.display());
     }
@@ -108,6 +132,12 @@ pub fn validate_existing_workspace(workspace: &Path) -> Result<()> {
     }
     if !venv_target.is_dir() {
         bail!("workspace 缺少 .venv 目录：{}", venv_target.display());
+    }
+    if !venv_scripts_target.is_dir() {
+        bail!(
+            "workspace 缺少 .venv\\Scripts 目录：{}",
+            venv_scripts_target.display()
+        );
     }
     Ok(())
 }

@@ -1,15 +1,15 @@
 (() => {
-  const HOOK_VERSION = "4";
+  const HOOK_VERSION = "5";
   const REQUEST_MIDDLEWARE_NAME = "localgpt-request";
-  const RESPONSE_MIDDLEWARE_NAME = "localgpt-response";
+  const INBOUND_MIDDLEWARE_NAME = "localgpt-inbound";
   const requestIdToWorkspaceId = new Map();
 
   if (window.__localgptHookVersion === HOOK_VERSION) return;
   if (typeof window.__codexPlusRegisterDispatchMiddleware !== "function") {
     throw new Error("LocalGPT 需要 Codex++ dispatch middleware 注册入口");
   }
-  if (typeof window.__codexPlusRegisterDispatchResponseMiddleware !== "function") {
-    throw new Error("LocalGPT 需要 Codex++ dispatch response middleware 注册入口");
+  if (typeof window.__codexPlusRegisterInboundMiddleware !== "function") {
+    throw new Error("LocalGPT 需要 Codex++ inbound middleware 注册入口");
   }
   if (typeof window.__codexSessionDeleteBridge !== "function") {
     throw new Error("LocalGPT 需要 Codex++ bridge");
@@ -38,10 +38,14 @@
 
   function paramsOf(message, label) {
     const params = message?.request?.params;
-    if (!params || typeof params !== "object") {
-      throw new Error(`LocalGPT ${label} 缺少 params`);
+    if (!isPlainObject(params)) {
+      throw new Error(`LocalGPT ${label} 缺少 params 或 params 类型非法`);
     }
     return params;
+  }
+
+  function isPlainObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 
   function isThreadStartMessage(message) {
@@ -55,33 +59,49 @@
     return message?.type === "mcp-request" && message?.request?.method === "turn/start";
   }
 
-  function withThreadStartEnv(config, venvPath) {
-    const nextConfig = { ...(config || {}) };
-    const existingSet =
-      nextConfig["shell_environment_policy.set"] &&
-      typeof nextConfig["shell_environment_policy.set"] === "object"
-        ? nextConfig["shell_environment_policy.set"]
-        : {};
-    nextConfig["shell_environment_policy.inherit"] = "all";
-    nextConfig["shell_environment_policy.set"] = {
-      ...existingSet,
-      VIRTUAL_ENV: venvPath,
+  function withThreadStartEnv(config, result) {
+    if (config !== undefined && config !== null && !isPlainObject(config)) {
+      throw new Error("LocalGPT thread/start config 类型非法");
+    }
+
+    const currentConfig = config || {};
+    const currentSet = currentConfig["shell_environment_policy.set"];
+    if (currentSet !== undefined && currentSet !== null && !isPlainObject(currentSet)) {
+      throw new Error("LocalGPT thread/start shell_environment_policy.set 类型非法");
+    }
+
+    return {
+      ...currentConfig,
+      "shell_environment_policy.inherit": "all",
+      "shell_environment_policy.set": {
+        ...(currentSet || {}),
+        VIRTUAL_ENV: result.venv,
+        PATH: result.path,
+      },
     };
-    return nextConfig;
+  }
+
+  function parseInboundMcpResponse(event) {
+    if (event?.data?.type !== "mcp-response") return null;
+    const raw = event?.data?.message;
+    if (typeof raw !== "string" || !raw.trim()) {
+      throw new Error("LocalGPT mcp-response 缺少 message JSON");
+    }
+    const parsed = JSON.parse(raw);
+    if (!isPlainObject(parsed)) {
+      throw new Error("LocalGPT mcp-response message 类型非法");
+    }
+    return parsed;
+  }
+
+  function responseIdOf(response) {
+    const responseId = response?.id;
+    return responseId === undefined || responseId === null ? "" : String(responseId).trim();
   }
 
   function extractThreadId(response) {
-    const candidates = [
-      response?.result?.thread?.id,
-      response?.thread?.id,
-      response?.result?.threadId,
-      response?.threadId,
-    ];
-    for (const candidate of candidates) {
-      const value = candidate === undefined || candidate === null ? "" : String(candidate).trim();
-      if (value) return value;
-    }
-    return "";
+    const threadId = response?.result?.thread?.id;
+    return threadId === undefined || threadId === null ? "" : String(threadId).trim();
   }
 
   async function handleThreadStartRequest(message) {
@@ -109,9 +129,13 @@
       typeof result.workspaceId !== "string" ||
       typeof result.workspace !== "string" ||
       typeof result.venv !== "string" ||
+      typeof result.venvScripts !== "string" ||
+      typeof result.path !== "string" ||
       !result.workspaceId ||
       !result.workspace ||
-      !result.venv
+      !result.venv ||
+      !result.venvScripts ||
+      !result.path
     ) {
       throw new Error("LocalGPT prepare-thread-start 返回非法 action");
     }
@@ -123,6 +147,7 @@
       originalCwd: params.cwd,
       nextCwd: result.workspace,
       venv: result.venv,
+      venvScripts: result.venvScripts,
     });
 
     return {
@@ -133,10 +158,40 @@
           ...params,
           cwd: result.workspace,
           workspaceRoots: [result.workspace],
-          config: withThreadStartEnv(params.config, result.venv),
+          config: withThreadStartEnv(params.config, result),
         },
       },
     };
+  }
+
+  async function handleThreadStartResponse(event) {
+    const response = parseInboundMcpResponse(event);
+    if (!response) return event;
+
+    const responseId = responseIdOf(response);
+    if (!responseId || !requestIdToWorkspaceId.has(responseId)) return event;
+
+    const threadId = extractThreadId(response);
+    if (!threadId) {
+      throw new Error("LocalGPT thread/start response 缺少 result.thread.id");
+    }
+
+    const workspaceId = requestIdToWorkspaceId.get(responseId);
+    const result = await bridge("/localgpt/commit-thread-start", {
+      threadId,
+      workspaceId,
+    });
+    if (result?.status !== "ok") {
+      throw new Error("LocalGPT commit-thread-start 返回非法 status");
+    }
+
+    requestIdToWorkspaceId.delete(responseId);
+    record("thread_start.committed", {
+      requestId: responseId,
+      threadId,
+      workspaceId,
+    });
+    return event;
   }
 
   async function handleTurnStartRequest(message) {
@@ -147,13 +202,11 @@
     record("turn_start.observed", {
       threadId: params.threadId,
       cwd: params.cwd,
-      inputCount: Array.isArray(params.input) ? params.input.length : null,
     });
 
     const result = await bridge("/localgpt/prepare-turn-start", {
       threadId: params.threadId,
       cwd: params.cwd,
-      input: params.input || [],
     });
 
     if (result?.action === "passthrough") {
@@ -194,37 +247,8 @@
     return message;
   });
 
-  window.__codexPlusRegisterDispatchResponseMiddleware(RESPONSE_MIDDLEWARE_NAME, async (message, response) => {
-    if (!isThreadStartMessage(message)) return response;
-
-    const requestId = requestIdOf(message);
-    if (!requestId) throw new Error("LocalGPT thread/start response 缺少 request.id");
-
-    const workspaceId = requestIdToWorkspaceId.get(requestId);
-    if (!workspaceId) return response;
-
-    const threadId = extractThreadId(response);
-    if (!threadId) {
-      throw new Error("LocalGPT thread/start response 缺少 result.thread.id");
-    }
-
-    const result = await bridge("/localgpt/commit-thread-start", {
-      threadId,
-      workspaceId,
-    });
-    if (result?.action !== "committed") {
-      throw new Error("LocalGPT commit-thread-start 返回非法 action");
-    }
-
-    requestIdToWorkspaceId.delete(requestId);
-    record("thread_start.committed", {
-      requestId,
-      threadId,
-      workspaceId,
-      cwd: result.cwd || "",
-      statePath: result.statePath || "",
-    });
-    return response;
+  window.__codexPlusRegisterInboundMiddleware(INBOUND_MIDDLEWARE_NAME, (event) => {
+    return handleThreadStartResponse(event);
   });
 
   window.__localgptHookVersion = HOOK_VERSION;

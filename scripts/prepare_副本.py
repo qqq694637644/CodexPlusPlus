@@ -159,39 +159,33 @@ def patch_renderer_inject_js() -> None:
         "    window.__codexPlusDispatchMiddlewares = middlewares;\n"
         "  }\n"
         "\n"
-        "  function registerCodexPlusDispatchResponseMiddleware(name, handler) {\n"
-        "    if (!name || typeof handler !== \"function\") throw new Error(\"Invalid dispatch response middleware\");\n"
-        "    const middlewares = Array.isArray(window.__codexPlusDispatchResponseMiddlewares) ? window.__codexPlusDispatchResponseMiddlewares : [];\n"
-        "    if (middlewares.some((middleware) => middleware.name === name)) throw new Error(`Dispatch response middleware already registered: ${name}`);\n"
+        "  function registerCodexPlusInboundMiddleware(name, handler) {\n"
+        "    if (!name || typeof handler !== \"function\") throw new Error(\"Invalid inbound middleware\");\n"
+        "    const middlewares = Array.isArray(window.__codexPlusInboundMiddlewares) ? window.__codexPlusInboundMiddlewares : [];\n"
+        "    if (middlewares.some((middleware) => middleware.name === name)) throw new Error(`Inbound middleware already registered: ${name}`);\n"
         "    middlewares.push({ name, handler });\n"
-        "    window.__codexPlusDispatchResponseMiddlewares = middlewares;\n"
+        "    window.__codexPlusInboundMiddlewares = middlewares;\n"
         "  }\n"
         "\n"
-        "  function runCodexPlusDispatchResponseMiddlewares(message, response) {\n"
-        "    const middlewares = Array.isArray(window.__codexPlusDispatchResponseMiddlewares) ? window.__codexPlusDispatchResponseMiddlewares : [];\n"
-        "    const runAt = (index, currentResponse) => {\n"
-        "      if (index >= middlewares.length) return currentResponse;\n"
-        "      const nextResponse = middlewares[index].handler(message, currentResponse);\n"
-        "      if (nextResponse && typeof nextResponse.then === \"function\") {\n"
-        "        return nextResponse.then((resolvedResponse) => runAt(index + 1, resolvedResponse === undefined ? currentResponse : resolvedResponse));\n"
+        "  function runCodexPlusInboundMiddlewares(event, finalHandle) {\n"
+        "    const middlewares = Array.isArray(window.__codexPlusInboundMiddlewares) ? window.__codexPlusInboundMiddlewares : [];\n"
+        "    const runAt = (index, currentEvent) => {\n"
+        "      if (!currentEvent || typeof currentEvent !== \"object\") throw new Error(\"Inbound middleware returned invalid event\");\n"
+        "      if (index >= middlewares.length) return finalHandle(currentEvent);\n"
+        "      const nextEvent = middlewares[index].handler(currentEvent);\n"
+        "      if (nextEvent && typeof nextEvent.then === \"function\") {\n"
+        "        return nextEvent.then((resolvedEvent) => runAt(index + 1, resolvedEvent));\n"
         "      }\n"
-        "      return runAt(index + 1, nextResponse === undefined ? currentResponse : nextResponse);\n"
+        "      return runAt(index + 1, nextEvent);\n"
         "    };\n"
-        "    return runAt(0, response);\n"
+        "    return runAt(0, event);\n"
         "  }\n"
         "\n"
         "  function runCodexPlusDispatchMiddlewares(message, finalDispatch) {\n"
         "    const middlewares = Array.isArray(window.__codexPlusDispatchMiddlewares) ? window.__codexPlusDispatchMiddlewares : [];\n"
         "    const runAt = (index, currentMessage) => {\n"
         "      if (!currentMessage || typeof currentMessage !== \"object\") throw new Error(\"Dispatch middleware returned invalid message\");\n"
-        "      if (index >= middlewares.length) {\n"
-        "        const finalMessage = currentMessage;\n"
-        "        const response = finalDispatch(finalMessage);\n"
-        "        if (response && typeof response.then === \"function\") {\n"
-        "          return response.then((resolvedResponse) => runCodexPlusDispatchResponseMiddlewares(finalMessage, resolvedResponse));\n"
-        "        }\n"
-        "        return runCodexPlusDispatchResponseMiddlewares(finalMessage, response);\n"
-        "      }\n"
+        "      if (index >= middlewares.length) return finalDispatch(currentMessage);\n"
         "      const nextMessage = middlewares[index].handler(currentMessage);\n"
         "      if (nextMessage && typeof nextMessage.then === \"function\") {\n"
         "        return nextMessage.then((resolvedMessage) => runAt(index + 1, resolvedMessage));\n"
@@ -202,7 +196,7 @@ def patch_renderer_inject_js() -> None:
         "  }\n"
         "\n"
         "  window.__codexPlusRegisterDispatchMiddleware = registerCodexPlusDispatchMiddleware;\n"
-        "  window.__codexPlusRegisterDispatchResponseMiddleware = registerCodexPlusDispatchResponseMiddleware;\n"
+        "  window.__codexPlusRegisterInboundMiddleware = registerCodexPlusInboundMiddleware;\n"
         "\n"
     )
     replace_exact_once(path, install_anchor, middleware_code + install_anchor)
@@ -246,18 +240,28 @@ def patch_renderer_inject_js() -> None:
         "      try {\n"
         "        const module = await loadCodexAppModule(\"vscode-api-\");\n"
         "        const dispatcher = module.f;\n"
-        "        if (!dispatcher || typeof dispatcher.dispatchMessage !== \"function\") throw new Error(\"Codex dispatcher export unavailable: vscode-api-.f\");\n"
-        "        if (dispatcher.__codexServiceTierOriginalDispatchMessage) {\n"
+        "        if (!dispatcher || typeof dispatcher.dispatchMessage !== \"function\") throw new Error(\"Codex dispatcher dispatchMessage unavailable: vscode-api-.f\");\n"
+        "        if (typeof dispatcher.handleMessage !== \"function\") throw new Error(\"Codex dispatcher handleMessage unavailable: vscode-api-.f\");\n"
+        "        const hasDispatchPatch = !!dispatcher.__codexServiceTierOriginalDispatchMessage;\n"
+        "        const hasInboundPatch = !!dispatcher.__codexServiceTierOriginalHandleMessage;\n"
+        "        if (hasDispatchPatch || hasInboundPatch) {\n"
+        "          if (!hasDispatchPatch || !hasInboundPatch) throw new Error(\"Codex dispatcher patch state inconsistent\");\n"
         "          window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;\n"
         "          return;\n"
         "        }\n"
         "        dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);\n"
+        "        dispatcher.__codexServiceTierOriginalHandleMessage = dispatcher.handleMessage.bind(dispatcher);\n"
         "        dispatcher.dispatchMessage = (type, payload) => {\n"
         "          const message = codexServiceTierRequestOverride({ ...(payload || {}), type });\n"
         "          return runCodexPlusDispatchMiddlewares(message, (finalMessage) => {\n"
         "            const nextType = finalMessage?.type || type;\n"
         "            const { type: _type, ...nextPayload } = finalMessage || {};\n"
         "            return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);\n"
+        "          });\n"
+        "        };\n"
+        "        dispatcher.handleMessage = (event) => {\n"
+        "          return runCodexPlusInboundMiddlewares(event, (finalEvent) => {\n"
+        "            return dispatcher.__codexServiceTierOriginalHandleMessage(finalEvent);\n"
         "          });\n"
         "        };\n"
         "        window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;\n"
@@ -329,26 +333,6 @@ def patch_renderer_inject_js() -> None:
     replace_exact_once(path, old_upstream_worktree_patch, new_upstream_worktree_patch)
 
 
-def patch_model_catalog_rs() -> None:
-    # 当前 pinned upstream 的这个测试里重复设置 relay_mode，
-    # 会导致 `cargo check --all-targets` 编译失败。
-    # 这不是 LocalGPT 功能接线；只是让运行副本在 upstream 修复前保持可编译。
-    # 如果后续 upstream 修复该问题，基线 hash 会变化，脚本会 fail fast 提醒更新本替换规则。
-    path = BUILD_ROOT / "crates" / "codex-plus-core" / "tests" / "model_catalog.rs"
-    old = (
-        '                    relay_mode: RelayMode::PureApi,\n'
-        '                    model_list: "deepseek-coder\\nqwen3-coder\\nclaude-compatible".to_string(),\n'
-        '                    config_contents: "model = \\"qwen3-coder\\"\\n".to_string(),\n'
-        '                    relay_mode: codex_plus_core::settings::RelayMode::MixedApi,\n'
-    )
-    new = (
-        '                    relay_mode: RelayMode::MixedApi,\n'
-        '                    model_list: "deepseek-coder\\nqwen3-coder\\nclaude-compatible".to_string(),\n'
-        '                    config_contents: "model = \\"qwen3-coder\\"\\n".to_string(),\n'
-    )
-    replace_exact_once(path, old, new)
-
-
 def patch_assets_rs() -> None:
     path = BUILD_ROOT / "crates" / "codex-plus-core" / "src" / "assets.rs"
     old = (
@@ -383,7 +367,6 @@ def main() -> None:
     patch_cargo_lock()
     patch_routes_rs()
     patch_renderer_inject_js()
-    patch_model_catalog_rs()
     patch_assets_rs()
     print(f"副本已生成：{BUILD_ROOT}")
 

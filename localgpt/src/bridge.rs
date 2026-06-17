@@ -1,3 +1,4 @@
+use std::env;
 use std::path::Path;
 
 use anyhow::{Result, bail};
@@ -27,9 +28,6 @@ struct CommitThreadStartRequest {
 struct PrepareTurnStartRequest {
     thread_id: Option<String>,
     cwd: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    input: Option<Value>,
 }
 
 pub fn prepare_thread_start(payload: Value) -> Result<Value> {
@@ -37,27 +35,26 @@ pub fn prepare_thread_start(payload: Value) -> Result<Value> {
     let request_id = required_string(request.request_id.as_deref(), "thread/start 缺少 requestId")?;
     let cwd = required_string(request.cwd.as_deref(), "thread/start 缺少 cwd")?;
 
-    let source_cwd = paths::source_cwd()?;
     let incoming_cwd = Path::new(cwd);
     if !paths::is_source_cwd(incoming_cwd)? {
         return Ok(json!({
             "action": "passthrough",
-            "requestId": request_id,
             "reason": "cwd_mismatch",
-            "incomingCwd": cwd,
-            "sourceCwd": paths::display_path(&source_cwd),
         }));
     }
 
-    let prepared = bootstrap::create_workspace_for_thread_start()?;
+    let workspace = bootstrap::create_workspace_for_thread_start()?;
+    let venv_scripts = paths::display_path(&workspace.venv_scripts);
+    let next_path = path_with_venv_scripts(&venv_scripts)?;
+
     Ok(json!({
         "action": "rewrite",
         "requestId": request_id,
-        "workspaceId": prepared.workspace_id,
-        "workspace": paths::display_path(&prepared.workspace_path),
-        "venv": paths::display_path(&prepared.venv_path),
-        "sourceCwd": paths::display_path(&source_cwd),
-        "incomingCwd": cwd,
+        "workspaceId": workspace.workspace_id,
+        "workspace": paths::display_path(&workspace.workspace),
+        "venv": paths::display_path(&workspace.venv),
+        "venvScripts": venv_scripts,
+        "path": next_path,
     }))
 }
 
@@ -73,16 +70,12 @@ pub fn commit_thread_start(payload: Value) -> Result<Value> {
     paths::validate_workspace_id(workspace_id)?;
     let workspace = paths::workspace_path(workspace_id)?;
     bootstrap::validate_existing_workspace(&workspace)?;
-    let state = state::bind_thread(thread_id, workspace_id)?;
+    state::set_thread_mapping(thread_id, workspace_id)?;
 
     Ok(json!({
-        "action": "committed",
+        "status": "ok",
         "threadId": thread_id,
         "workspaceId": workspace_id,
-        "cwd": paths::display_path(&workspace),
-        "venv": paths::display_path(&paths::venv_path(workspace_id)?),
-        "statePath": paths::display_path(&paths::state_path()?),
-        "threadCount": state.threads.len(),
     }))
 }
 
@@ -92,20 +85,17 @@ pub fn prepare_turn_start(payload: Value) -> Result<Value> {
     let cwd = required_string(request.cwd.as_deref(), "turn/start 缺少 cwd")?;
     paths::validate_thread_id(thread_id)?;
 
-    if let Some(workspace_id) = state::workspace_id_for_thread(thread_id)? {
+    if let Some(workspace_id) = state::get_workspace_id(thread_id)? {
         let workspace = paths::workspace_path(&workspace_id)?;
-        let venv = paths::venv_path(&workspace_id)?;
         bootstrap::validate_existing_workspace(&workspace)?;
         return Ok(json!({
             "action": "rewrite",
             "threadId": thread_id,
             "workspaceId": workspace_id,
             "cwd": paths::display_path(&workspace),
-            "venv": paths::display_path(&venv),
         }));
     }
 
-    let source_cwd = paths::source_cwd()?;
     let incoming_cwd = Path::new(cwd);
     if paths::is_source_cwd(incoming_cwd)? {
         bail!(
@@ -116,11 +106,22 @@ pub fn prepare_turn_start(payload: Value) -> Result<Value> {
 
     Ok(json!({
         "action": "passthrough",
-        "threadId": thread_id,
         "reason": "cwd_mismatch",
-        "incomingCwd": cwd,
-        "sourceCwd": paths::display_path(&source_cwd),
     }))
+}
+
+fn path_with_venv_scripts(venv_scripts: &str) -> Result<String> {
+    let inherited_path = inherited_path()?;
+    Ok(format!("{};{}", venv_scripts, inherited_path))
+}
+
+fn inherited_path() -> Result<String> {
+    let value = env::var_os("PATH")
+        .or_else(|| env::var_os("Path"))
+        .map(|value| value.to_string_lossy().trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("LocalGPT 无法读取后端进程 PATH"))?;
+    Ok(value)
 }
 
 fn required_string<'a>(value: Option<&'a str>, message: &str) -> Result<&'a str> {
@@ -174,5 +175,11 @@ mod tests {
             "workspaceId": "thread-ok",
         });
         assert!(commit_thread_start(payload).is_err());
+    }
+
+    #[test]
+    fn path_with_venv_scripts_keeps_original_path() {
+        let value = path_with_venv_scripts(r"D:\repo\data\localgpt-x\.venv\Scripts").unwrap();
+        assert!(value.starts_with(r"D:\repo\data\localgpt-x\.venv\Scripts;"));
     }
 }

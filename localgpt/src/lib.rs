@@ -7,9 +7,8 @@ pub mod templates;
 
 use serde_json::Value;
 
-/// Backward-compatible bridge entrypoint for older generated runtimes.
-pub async fn handle_bridge(payload: Value) -> anyhow::Result<Value> {
-    bridge::prepare_turn_start(payload)
+pub async fn handle_bridge(_payload: Value) -> anyhow::Result<Value> {
+    anyhow::bail!("LocalGPT 旧 handle_bridge 入口已废弃，请重新运行 scripts/prepare_副本.py 生成新运行副本")
 }
 
 pub async fn prepare_thread_start(payload: Value) -> anyhow::Result<Value> {

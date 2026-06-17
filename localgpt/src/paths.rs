@@ -26,6 +26,10 @@ pub fn venv_path(workspace_id: &str) -> Result<PathBuf> {
     Ok(workspace_path(workspace_id)?.join(".venv"))
 }
 
+pub fn venv_scripts_path(workspace_id: &str) -> Result<PathBuf> {
+    Ok(venv_path(workspace_id)?.join("Scripts"))
+}
+
 pub fn path_key(path: &Path) -> String {
     let mut value = path.as_os_str().to_string_lossy().replace('/', "\\");
     if let Some(stripped) = value.strip_prefix(r"\\?\") {
