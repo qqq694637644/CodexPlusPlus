@@ -126,6 +126,7 @@
 
     if (
       result?.action !== "rewrite" ||
+      result.requestId !== requestId ||
       typeof result.workspaceId !== "string" ||
       typeof result.workspace !== "string" ||
       typeof result.venv !== "string" ||

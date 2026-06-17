@@ -75,8 +75,6 @@ pub fn commit_thread_start(payload: Value) -> Result<Value> {
 
     Ok(json!({
         "status": "ok",
-        "threadId": thread_id,
-        "workspaceId": workspace_id,
     }))
 }
 
