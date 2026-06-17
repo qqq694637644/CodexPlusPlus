@@ -55,15 +55,11 @@ fn validate_existing_workspace(workspace: &Path) -> Result<()> {
     }
     let agents_path = workspace.join("AGENTS.md");
     let skills_target = workspace.join(".agents").join("skills");
-    let skill_path = skill_sentinel_path(workspace);
     if !agents_path.is_file() {
         bail!("workspace 缺少 AGENTS.md：{}", agents_path.display());
     }
     if !skills_target.is_dir() {
         bail!("workspace 缺少 skills 目录：{}", skills_target.display());
-    }
-    if !skill_path.is_file() {
-        bail!("workspace 缺少 localgpt-workspace skill：{}", skill_path.display());
     }
     Ok(())
 }
