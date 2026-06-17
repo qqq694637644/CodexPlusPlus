@@ -22,7 +22,29 @@ pub fn ensure_workspace(thread_id: &str) -> Result<std::path::PathBuf> {
 
 fn bootstrap_new_workspace(workspace: &Path) -> Result<()> {
     templates::validate()?;
+    let temp_workspace = temp_workspace_path(workspace)?;
+    if temp_workspace.exists() {
+        bail!("发现未完成的 workspace 初始化目录：{}", temp_workspace.display());
+    }
+    if let Some(parent) = workspace.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("创建 workspace 父目录失败：{}", parent.display()))?;
+    }
 
+    bootstrap_workspace_contents(&temp_workspace)?;
+    validate_existing_workspace(&temp_workspace)?;
+    fs::rename(&temp_workspace, workspace).with_context(|| {
+        format!(
+            "提交 workspace 初始化失败：{} -> {}",
+            temp_workspace.display(),
+            workspace.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn bootstrap_workspace_contents(workspace: &Path) -> Result<()> {
     fs::create_dir_all(workspace)
         .with_context(|| format!("创建 workspace 目录失败：{}", workspace.display()))?;
 
@@ -31,8 +53,6 @@ fn bootstrap_new_workspace(workspace: &Path) -> Result<()> {
         .with_context(|| format!("复制 AGENTS.md 失败：{}", agents_path.display()))?;
 
     copy_dir(&templates::skills_dir()?, &workspace.join(".agents").join("skills"))?;
-
-    validate_existing_workspace(workspace)?;
 
     Ok(())
 }
@@ -50,6 +70,16 @@ fn validate_existing_workspace(workspace: &Path) -> Result<()> {
         bail!("workspace 缺少 skills 目录：{}", skills_target.display());
     }
     Ok(())
+}
+
+fn temp_workspace_path(workspace: &Path) -> Result<std::path::PathBuf> {
+    let name = workspace
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("workspace 路径缺少目录名：{}", workspace.display()))?;
+    Ok(workspace.with_file_name(format!(
+        ".{}.localgpt-tmp",
+        name.to_string_lossy()
+    )))
 }
 
 fn copy_dir(source: &Path, target: &Path) -> Result<()> {
