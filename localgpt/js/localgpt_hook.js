@@ -1,5 +1,5 @@
 (() => {
-  const HOOK_VERSION = "6";
+  const HOOK_VERSION = "7";
   const REQUEST_MIDDLEWARE_NAME = "localgpt-request";
   const INBOUND_MIDDLEWARE_NAME = "localgpt-inbound";
   const requestIdToWorkspaceId = new Map();
@@ -59,15 +59,15 @@
     return message?.type === "mcp-request" && message?.request?.method === "turn/start";
   }
 
-  function withThreadStartEnv(config, result) {
+  function withShellEnv(config, result, label) {
     if (config !== undefined && config !== null && !isPlainObject(config)) {
-      throw new Error("LocalGPT thread/start config 类型非法");
+      throw new Error(`LocalGPT ${label} config 类型非法`);
     }
 
     const currentConfig = config || {};
     const currentSet = currentConfig["shell_environment_policy.set"];
     if (currentSet !== undefined && currentSet !== null && !isPlainObject(currentSet)) {
-      throw new Error("LocalGPT thread/start shell_environment_policy.set 类型非法");
+      throw new Error(`LocalGPT ${label} shell_environment_policy.set 类型非法`);
     }
 
     return {
@@ -159,7 +159,7 @@
           ...params,
           cwd: result.workspace,
           workspaceRoots: [result.workspace],
-          config: withThreadStartEnv(params.config, result),
+          config: withShellEnv(params.config, result, "thread/start"),
         },
       },
     };
@@ -219,7 +219,17 @@
       return message;
     }
 
-    if (result?.action !== "rewrite" || typeof result.cwd !== "string" || !result.cwd) {
+    if (
+      result?.action !== "rewrite" ||
+      typeof result.cwd !== "string" ||
+      typeof result.venv !== "string" ||
+      typeof result.venvScripts !== "string" ||
+      typeof result.path !== "string" ||
+      !result.cwd ||
+      !result.venv ||
+      !result.venvScripts ||
+      !result.path
+    ) {
       throw new Error("LocalGPT prepare-turn-start 返回非法 action");
     }
 
@@ -228,6 +238,8 @@
       workspaceId: result.workspaceId || "",
       originalCwd: params.cwd,
       nextCwd: result.cwd,
+      venv: result.venv,
+      venvScripts: result.venvScripts,
     });
 
     return {
@@ -237,6 +249,7 @@
         params: {
           ...params,
           cwd: result.cwd,
+          config: withShellEnv(params.config, result, "turn/start"),
         },
       },
     };

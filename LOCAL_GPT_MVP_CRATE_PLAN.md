@@ -56,17 +56,18 @@ config["shell_environment_policy.set"].PATH = "...\\.venv\\Scripts;" + inherited
 
 已验证能进入 Codex 命令执行环境。
 
-### 2.2 `turn/start` 只适合改 `cwd`
+### 2.2 `turn/start` 也必须补注入 shell env
 
 `turn/start` 改写 `params.cwd` 有效。
 
-但在 `turn/start` 里临时塞：
+已联合验证：后续 turn 里只保留 `cwd` 和 `VIRTUAL_ENV` 不够，`PATH` 会被 Codex 命令执行链路重新组织，导致 `python` 回落到系统 Python。必须在每个命中的 `turn/start` 里继续注入：
 
 ```js
-params.config["shell_environment_policy.set"]
+params.config["shell_environment_policy.set"].VIRTUAL_ENV = "...\\.venv"
+params.config["shell_environment_policy.set"].PATH = "...\\.venv\\Scripts;" + inheritedPath
 ```
 
-已验证无效，所以不要走这条路。
+已验证这样可以让后续 turn 的 `python`、`pip` 和 `sys.executable` 继续指向当前 workspace 的 `.venv`。
 
 ### 2.3 `thread/start` 时还没有真实 `threadId`
 
@@ -497,7 +498,7 @@ localgpt-state.json.tmp -> localgpt-state.json
 1. 校验 threadId。
 2. 校验 cwd 非空。
 3. 从 state 查 threads[threadId]。
-4. 如果存在：返回 rewrite 到 workspace。
+4. 如果存在：返回 rewrite 到 workspace，并返回 `VIRTUAL_ENV` / `PATH` 注入需要的路径。
 5. 如果不存在且 cwd == source_cwd：fail fast。
 6. 如果不存在且 cwd != source_cwd：passthrough。
 ```
@@ -509,7 +510,10 @@ localgpt-state.json.tmp -> localgpt-state.json
   "action": "rewrite",
   "threadId": "019ed5af-d10d-7c12-b3c7-cd81b7b1ea44",
   "workspaceId": "localgpt-8be71464-be84-49c9-a166-37458d61a674",
-  "cwd": "D:\\repos\\CodexPlusPlus\\data\\localgpt-8be71464-be84-49c9-a166-37458d61a674"
+  "cwd": "D:\\repos\\CodexPlusPlus\\data\\localgpt-8be71464-be84-49c9-a166-37458d61a674",
+  "venv": "D:\\repos\\CodexPlusPlus\\data\\localgpt-8be71464-be84-49c9-a166-37458d61a674\\.venv",
+  "venvScripts": "D:\\repos\\CodexPlusPlus\\data\\localgpt-8be71464-be84-49c9-a166-37458d61a674\\.venv\\Scripts",
+  "path": "D:\\repos\\CodexPlusPlus\\data\\localgpt-8be71464-be84-49c9-a166-37458d61a674\\.venv\\Scripts;...原 PATH..."
 }
 ```
 
@@ -737,10 +741,10 @@ message.type === "mcp-request" && message.request?.method === "turn/start"
 2. 校验 params.threadId。
 3. 调 bridge /localgpt/prepare-turn-start。
 4. passthrough：原样返回。
-5. rewrite：只改 params.cwd。
+5. rewrite：改 params.cwd，并注入 `VIRTUAL_ENV` / `PATH`。
 ```
 
-不要在 `turn/start` 注入 `config`。
+`turn/start` 的 env 注入必须和 `thread/start` 使用同一套 config 形状。
 
 ## 11. `prepare_副本.py` 修改点
 
@@ -888,6 +892,8 @@ cwd == D:\repos\CodexPlusPlus
 - `thread/start` 注入 `PATH = .venv\Scripts;原 PATH`。
 - response 后持久化 `threadId -> workspaceId`。
 - `turn/start` 根据持久化映射改 `cwd`。
+- `turn/start` 根据持久化映射注入 `VIRTUAL_ENV`。
+- `turn/start` 根据持久化映射注入 `PATH = .venv\Scripts;原 PATH`。
 - App 重启后依靠状态文件恢复旧会话 workspace。
 
 不要做：
@@ -896,6 +902,5 @@ cwd == D:\repos\CodexPlusPlus
 - 不做 UI 配置。
 - 不修改 Codex CLI wrapper。
 - 不修改 launcher 进程环境。
-- 不在 `turn/start` 里注入 shell env。
 - 不持久化 requestId 中间态。
 - 不兼容旧目录名。

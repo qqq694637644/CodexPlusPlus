@@ -87,11 +87,19 @@ pub fn prepare_turn_start(payload: Value) -> Result<Value> {
     if let Some(workspace_id) = state::get_workspace_id(thread_id)? {
         let workspace = paths::workspace_path(&workspace_id)?;
         bootstrap::validate_existing_workspace(&workspace)?;
+        let inherited_path = inherited_path()?;
+        let venv = paths::venv_path(&workspace_id)?;
+        let venv_scripts = paths::venv_scripts_path(&workspace_id)?;
+        let venv_scripts_text = paths::display_path(&venv_scripts);
+        let next_path = path_with_venv_scripts(&venv_scripts_text, &inherited_path);
         return Ok(json!({
             "action": "rewrite",
             "threadId": thread_id,
             "workspaceId": workspace_id,
             "cwd": paths::display_path(&workspace),
+            "venv": paths::display_path(&venv),
+            "venvScripts": venv_scripts_text,
+            "path": next_path,
         }));
     }
 
