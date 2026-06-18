@@ -11,6 +11,7 @@ from .operations import check_status, describe_operations, execute_operation, re
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_stdout()
     parser = argparse.ArgumentParser(description="LocalGPT Gitea 平台工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -52,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
         print(result_to_json(result))
         return 0 if result.get("ok") else 1
     raise AssertionError(args.command)
+
+
+def configure_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure:
+        reconfigure(encoding="utf-8")
 
 
 def load_request(args: argparse.Namespace) -> dict[str, Any]:
