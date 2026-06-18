@@ -47,10 +47,13 @@ gitea_execute
 
 每个 operation 必须在 registry 中声明 metadata。metadata 是参数 schema 的唯一事实来源，文档和 skill 不重复维护完整参数表。
 
-必需字段：
+必需字段分两层。
+
+`name` 由 `OPERATION_SPECS` 的 registry key 提供，不在单个 spec object 内重复维护。`gitea_describe_operations` 输出 operation schema 时必须补出 `name`，且 `name` 必须等于 registry key。
+
+spec object 必需字段：
 
 ```text
-name
 category
 description
 repo_required

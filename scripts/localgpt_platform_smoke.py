@@ -152,6 +152,9 @@ async def main() -> None:
     assert "actions.get_job_log" not in OPERATION_SPECS
 
     assert describe_operations(category="artifact", detail="brief")["ok"] is True
+    for operation in describe_operations(detail="brief")["operations"]:
+        assert operation["name"] in OPERATION_SPECS, operation
+        assert "name" not in OPERATION_SPECS[operation["name"]], operation
     invalid_category = describe_operations(category="nope")
     assert invalid_category["ok"] is False
     assert invalid_category["error"]["code"] == "invalid_category"
@@ -196,7 +199,8 @@ async def main() -> None:
     assert summary["ok"] is True
     assert summary["operation"] == "ci.get_run_summary"
     assert summary["data"]["job_count"] == 3
-    assert summary["data"]["failed_cancelled_timed_out_job_count"] == 1
+    assert summary["data"]["failed_like_job_count"] == 1
+    assert "failed_cancelled_timed_out_job_count" not in summary["data"], summary
     assert summary["data"]["queued_in_progress_job_count"] == 2
     assert summary["data"]["status_counts"] == {"failure": 1, "in_progress": 1, "queued": 1}
     assert summary["data"]["conclusion_counts"] == {"<missing>": 2, "failure": 1}

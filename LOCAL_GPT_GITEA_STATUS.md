@@ -59,12 +59,21 @@ ci.get_run_summary
 - 查询该 run 的 jobs。
 - 返回 run compact summary。
 - 返回 jobs compact summary。
-- 返回 failed/cancelled/timed_out job count。
+- 返回 failed-like job count，即 failure/cancelled/timed_out/startup_failure/action_required。
 - 返回 queued/in_progress job count。
 - 返回 status/conclusion 计数。
 - 不下载日志。
 - 不写本地文件。
 - 存在失败 job 时给出 `next_suggested_operations=["ci.prepare_failure_context"]`。
+
+当前返回字段：
+
+```text
+failed_like_job_count
+queued_in_progress_job_count
+status_counts
+conclusion_counts
+```
 
 ### Job Log 下载
 
