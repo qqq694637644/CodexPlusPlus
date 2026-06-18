@@ -206,7 +206,7 @@ Gitea artifact API 的传输格式是 zip，但 zip 不是对外产物。
 - `risk_level=high`。
 - 名称包含明确副作用动词，例如 `publish`、`dispatch`、`rerun`、`delete`、`merge`、`comment`。
 - 参数应包含必要的 `expected_*`，避免 Codex 使用陈旧上下文修改新状态。
-- `confirm=true` 可作为建议参数，不作为所有写 operation 的强制要求。
+- 所有远端写 operation 必须显式传 JSON boolean `confirm=true`；字符串、数字或其他 truthy 值不接受。
 - `evidence` 不记录 secret、完整大 body、token、registration token。
 - 失败不自动重试。
 - 组合读 operation 禁止调用远端写 operation。

@@ -92,7 +92,7 @@ actions.list_runners
 
 备注：
 
-- `actions.list_run_jobs` 当前兼容 `jobs` 和 `workflow_jobs` 两种已确认响应 shape。
+- `actions.list_run_jobs` strict parser 只接受官方 `jobs` 响应字段；其他字段返回 `unexpected_response_shape`。
 - 列表 operation 在 evidence 中记录 `result_count`。
 
 ### CI 候选 run 查询
@@ -203,13 +203,14 @@ workflow.dispatch_and_track
 
 行为：
 
-- `workflow.rerun_job`：读取 job，校验 `expected_status`、`expected_conclusion`、`expected_run_id`，再重跑 job。
+- `workflow.rerun_job`：读取 job，校验 job 所属 `run_id`、`expected_status`、`expected_conclusion`，再调用 run-scoped job rerun endpoint。
 - `workflow.rerun_run`：读取 run，校验 `expected_head_sha`、可选 status/conclusion，再重跑 run。
 - `workflow.dispatch_and_track`：触发 workflow dispatch，再查询候选 runs。
 
 共同要求：
 
 - `confirm=true`。
+- `confirm` 必须是 JSON boolean `true`，不接受字符串、数字或其他 truthy 值。
 - 远端写 evidence 不记录 secret、token 或完整大 body。
 - 不自动重试。
 - 不隐藏在读组合 operation 中。
@@ -228,7 +229,7 @@ pr.merge
 - `pr.preflight`：读取 PR metadata、base/head/head_sha、changed files、head_sha CI runs。
 - `pr.publish`：创建或更新 PR；开发阶段只支持 `mode=create|update`，不做宽泛 upsert。
 - `pr.comment`：给 PR 对应 issue 追加评论；返回 body 长度和 hash，不返回完整正文。
-- `pr.merge`：合并 PR；强制 `expected_head_sha`、`base_branch`、`merge_method`、`confirm=true`，默认 `require_ci_success=true`。
+- `pr.merge`：合并 PR；强制 `expected_head_sha`、`base_branch`、`merge_method`、`confirm=true`，默认 `require_ci_success=true`，且要求 head_sha 相关 CI 全部完成并为 success。
 
 不做：
 

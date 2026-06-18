@@ -60,7 +60,7 @@ Expected shapes used by the strict parser:
 
 ```text
 actions.list_runs:      object with workflow_runs: list[object]
-actions.list_run_jobs:  object with jobs: list[object] or workflow_jobs: list[object]
+actions.list_run_jobs:  object with jobs: list[object]
 actions.list_artifacts: object with artifacts: list[object]
 ```
 

@@ -54,6 +54,9 @@ class FakeGiteaClient:
         if path.endswith("/actions/workflows/ci.yml/runs"):
             return {"workflow_runs": [{"id": 11, "status": "queued", "head_branch": "main", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}, evidence
         if path.endswith("/actions/workflows/ci.yml/dispatches"):
+            assert (json_body or {}).get("return_run_details") is True, json_body
+            if self.broken == "dispatch_no_run_id":
+                return None, evidence
             return {"run_id": 11}, evidence
         if path.endswith("/pulls/7"):
             if method == "PATCH":
@@ -90,6 +93,15 @@ class FakeGiteaClient:
         if path.endswith("/actions/runs"):
             if self.broken == "runs":
                 return {"broken_runs": []}, evidence
+            if self.broken == "merge_ci_success":
+                return {"workflow_runs": [{"id": 30, "status": "success", "conclusion": "success", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}, evidence
+            if self.broken == "merge_ci_in_progress":
+                return {
+                    "workflow_runs": [
+                        {"id": 30, "status": "success", "conclusion": "success", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"},
+                        {"id": 31, "status": "in_progress", "conclusion": None, "head_sha": "abc", "created_at": "2026-01-01T00:01:00Z"},
+                    ]
+                }, evidence
             return {"workflow_runs": [{"id": 10, "status": "failure", "conclusion": "failure", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}, evidence
         if path.endswith("/actions/runs/10"):
             return {"id": 10, "status": "failure", "conclusion": "failure", "head_sha": "abc"}, evidence
@@ -98,6 +110,8 @@ class FakeGiteaClient:
         if path.endswith("/actions/runs/10/jobs"):
             if self.broken == "jobs":
                 return {"broken_jobs": [{"id": 99}]}, evidence
+            if self.broken == "workflow_jobs":
+                return {"workflow_jobs": [{"id": 99, "name": "test", "status": "failure", "conclusion": "failure"}]}, evidence
             return {
                 "jobs": [
                     {"id": 99, "name": "test", "status": "failure", "conclusion": "failure"},
@@ -108,6 +122,8 @@ class FakeGiteaClient:
         if path.endswith("/actions/jobs/99"):
             return {"id": 99, "run_id": 10, "name": "test", "status": "failure", "conclusion": "failure"}, evidence
         if path.endswith("/actions/jobs/99/rerun"):
+            raise AssertionError("workflow.rerun_job must use /actions/runs/{run}/jobs/{job_id}/rerun")
+        if path.endswith("/actions/runs/10/jobs/99/rerun"):
             return {"rerun": "job"}, evidence
         if path.endswith("/actions/runs/10/artifacts"):
             if self.broken == "artifacts":
@@ -219,12 +235,15 @@ async def main() -> None:
     summary_typo = await execute_operation("ci.get_run_summary", repo="owner/repo", params={"runid": 10})
     assert summary_typo["ok"] is False
     assert summary_typo["error"]["code"] == "unknown_param", summary_typo
-    write_without_confirm = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"job_id": 99})
+    write_without_confirm = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"run_id": 10, "job_id": 99})
     assert write_without_confirm["ok"] is False
     assert write_without_confirm["error"]["code"] == "missing_param", write_without_confirm
-    write_confirm_false = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"job_id": 99, "confirm": False})
+    write_confirm_false = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"run_id": 10, "job_id": 99, "confirm": False})
     assert write_confirm_false["ok"] is False
     assert write_confirm_false["error"]["code"] == "confirmation_required", write_confirm_false
+    write_confirm_string = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"run_id": 10, "job_id": 99, "confirm": "true"})
+    assert write_confirm_string["ok"] is False
+    assert write_confirm_string["error"]["code"] == "confirmation_required", write_confirm_string
     missing = await execute_operation("ci.prepare_failure_context", repo="owner/repo", params={})
     assert missing["ok"] is False
     assert missing["error"]["code"] == "missing_param", missing
@@ -265,15 +284,21 @@ async def main() -> None:
     assert cache["ok"] is True
     assert cache["data"]["official_cache_management_api"] is False
 
-    rerun_job = await workflow_rerun_job(client, "owner/repo", {"job_id": 99, "expected_status": "failure", "expected_conclusion": "failure", "expected_run_id": 10, "confirm": True})
+    rerun_job = await workflow_rerun_job(client, "owner/repo", {"run_id": 10, "job_id": 99, "expected_status": "failure", "expected_conclusion": "failure", "confirm": True})
     assert rerun_job["ok"] is True
     assert rerun_job["data"]["rerun_response"] == {"rerun": "job"}
+    assert any(item["path"].endswith("/actions/runs/10/jobs/99/rerun") for item in rerun_job["evidence"]), rerun_job
     rerun_run = await workflow_rerun_run(client, "owner/repo", {"run_id": 10, "expected_head_sha": "abc", "expected_status": "failure", "confirm": True})
     assert rerun_run["ok"] is True
     assert rerun_run["data"]["rerun_response"] == {"rerun": "run"}
     dispatch = await workflow_dispatch_and_track(client, "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
     assert dispatch["ok"] is True
     assert dispatch["data"]["dispatch_response_run_id"] == "11"
+    assert dispatch["data"]["matched"] is True
+    ambiguous_dispatch = await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_no_run_id"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
+    assert ambiguous_dispatch["ok"] is True
+    assert ambiguous_dispatch["data"]["matched"] is False
+    assert ambiguous_dispatch["data"]["match_status"] == "ambiguous_candidate"
 
     published = await pr_publish(client, "owner/repo", {"mode": "create", "head": "gpt/x", "base": "main", "title": "Created", "expected_head_sha": "abc", "confirm": True})
     assert published["ok"] is True
@@ -284,9 +309,14 @@ async def main() -> None:
     comment = await pr_comment(client, "owner/repo", {"pr_number": 7, "body": "hello", "confirm": True})
     assert comment["ok"] is True
     assert comment["data"]["body_length"] == 5
-    merge_blocked = await execute_operation("pr.merge", repo="owner/repo", params={"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True})
-    assert merge_blocked["ok"] is False
-    assert merge_blocked["error"]["code"] == "missing_base_url", merge_blocked
+    try:
+        await pr_merge(FakeGiteaClient(broken="merge_ci_in_progress"), "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True})
+    except PlatformError as exc:
+        assert exc.code == "ci_not_complete", exc.to_dict()
+    else:
+        raise AssertionError("expected pr.merge to reject in-progress CI")
+    merge_success = await pr_merge(FakeGiteaClient(broken="merge_ci_success"), "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True})
+    assert merge_success["ok"] is True
     merge = await pr_merge(client, "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True, "require_ci_success": False})
     assert merge["ok"] is True
     assert merge["data"]["merge_response"] == {"merged": True}
@@ -321,6 +351,7 @@ async def main() -> None:
         assert not list(Path(single["data"]["artifact_dir"]).glob("*.zip")), single
 
         await expect_shape_error(ci_prepare_failure_context(FakeGiteaClient(broken="jobs"), "owner/repo", {"cwd": tmp, "run_id": 10}))
+        await expect_shape_error(ci_get_run_summary(FakeGiteaClient(broken="workflow_jobs"), "owner/repo", {"run_id": 10}))
         await expect_shape_error(ci_get_run_summary(FakeGiteaClient(broken="jobs"), "owner/repo", {"run_id": 10}))
         await expect_shape_error(artifact_sync_for_run(FakeGiteaClient(broken="artifacts"), "owner/repo", {"cwd": tmp, "run_id": 10}))
         await expect_shape_error(pr_preflight(FakeGiteaClient(broken="pr_files"), "owner/repo", {"pr_number": 7}))

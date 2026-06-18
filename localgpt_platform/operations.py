@@ -44,6 +44,7 @@ _BRIEF_FIELDS = (
 
 _FAILED_CONCLUSIONS = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 _FAILED_STATUSES = {"failure", "cancelled", "timed_out"}
+_NONTERMINAL_RUN_STATES = {"queued", "in_progress", "pending", "waiting", "running", "requested", "created"}
 
 
 def operation_spec(
@@ -164,6 +165,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         required_params={},
         optional_params={
             "event": "string，workflow event name",
+            "workflow_id": "string/integer，传入时查询指定 workflow 的 runs",
             "branch": "string，workflow branch",
             "status": "string，pending/queued/in_progress/failure/success/skipped",
             "actor": "string，触发用户",
@@ -240,7 +242,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
             "page": "integer，页码，1 起始",
             "limit": "integer，每页数量",
         },
-        returns={"data": "必须是包含 jobs 或 workflow_jobs: list[object] 的 Gitea run jobs 响应。", "evidence": "含 page/limit 和 result_count 的调用证据。"},
+        returns={"data": "必须是包含 jobs: list[object] 的 Gitea run jobs 响应。", "evidence": "含 page/limit 和 result_count 的调用证据。"},
         example={"operation": "actions.list_run_jobs", "repo": "owner/repo", "params": {"run_id": 123}},
         risk_level="low",
     ),
@@ -382,16 +384,16 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
     ),
     "workflow.rerun_job": operation_spec(
         category="workflow",
-        description="显式重跑单个 job。远端写操作，先读取 job 并校验 expected_*。",
+        description="显式重跑单个 job。远端写操作，先读取 job 并校验 run_id/expected_*。",
         repo_required=True,
         read_only_remote=False,
         writes_local_files=False,
         writes_remote=True,
         requires_cwd=False,
-        required_params={"job_id": "integer/string，job id", "confirm": "boolean，必须 true"},
-        optional_params={"expected_status": "string，校验当前 job status", "expected_conclusion": "string，校验当前 job conclusion", "expected_run_id": "string/integer，校验 job 所属 run_id，如果 API 返回该字段"},
-        returns={"data": "job summary、rerun_response、content_returned=false。", "evidence": "GET job 和 POST rerun 证据。"},
-        example={"operation": "workflow.rerun_job", "repo": "owner/repo", "params": {"job_id": 456, "expected_status": "failure", "confirm": True}},
+        required_params={"run_id": "integer/string，job 所属 workflow run id", "job_id": "integer/string，job id", "confirm": "boolean，必须是 JSON true"},
+        optional_params={"expected_status": "string，校验当前 job status", "expected_conclusion": "string，校验当前 job conclusion"},
+        returns={"data": "job summary、rerun_response、content_returned=false。", "evidence": "GET job 和 run-scoped POST rerun 证据。"},
+        example={"operation": "workflow.rerun_job", "repo": "owner/repo", "params": {"run_id": 123, "job_id": 456, "expected_status": "failure", "confirm": True}},
         risk_level="high",
     ),
     "workflow.rerun_run": operation_spec(
@@ -402,7 +404,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_local_files=False,
         writes_remote=True,
         requires_cwd=False,
-        required_params={"run_id": "integer/string，workflow run id", "expected_head_sha": "string，当前 run head_sha", "confirm": "boolean，必须 true"},
+        required_params={"run_id": "integer/string，workflow run id", "expected_head_sha": "string，当前 run head_sha", "confirm": "boolean，必须是 JSON true"},
         optional_params={"expected_status": "string，校验当前 run status", "expected_conclusion": "string，校验当前 run conclusion"},
         returns={"data": "run summary、rerun_response、content_returned=false。", "evidence": "GET run 和 POST rerun 证据。"},
         example={"operation": "workflow.rerun_run", "repo": "owner/repo", "params": {"run_id": 123, "expected_head_sha": "abc123", "confirm": True}},
@@ -416,9 +418,9 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_local_files=False,
         writes_remote=True,
         requires_cwd=False,
-        required_params={"workflow_id": "string/integer，workflow id 或文件名", "ref": "string，dispatch ref", "confirm": "boolean，必须 true"},
+        required_params={"workflow_id": "string/integer，workflow id 或文件名", "ref": "string，dispatch ref", "confirm": "boolean，必须是 JSON true"},
         optional_params={"inputs": "object，workflow_dispatch inputs", "created_after": "string，ISO 时间，本地过滤候选 runs", "actor": "string，触发用户过滤", "candidate_limit": "integer，候选 run 数量；默认 10"},
-        returns={"data": "dispatch_response、candidate_runs、candidate_count、matched、content_returned=false。", "evidence": "dispatch 和候选 runs 查询证据。"},
+        returns={"data": "dispatch_response、candidate_runs、candidate_count、matched、match_status、content_returned=false。", "evidence": "dispatch 和候选 runs 查询证据。"},
         example={"operation": "workflow.dispatch_and_track", "repo": "owner/repo", "params": {"workflow_id": "ci.yml", "ref": "main", "confirm": True}},
         risk_level="high",
     ),
@@ -430,7 +432,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_local_files=False,
         writes_remote=True,
         requires_cwd=False,
-        required_params={"mode": "create 或 update", "expected_head_sha": "string，创建/更新后 PR head sha 必须匹配", "confirm": "boolean，必须 true"},
+        required_params={"mode": "create 或 update", "expected_head_sha": "string，创建/更新后 PR head sha 必须匹配", "confirm": "boolean，必须是 JSON true"},
         optional_params={"head": "string，create 必填", "base": "string，create 可用", "title": "string，create 必填；update 可选", "body": "string，create/update 可选", "existing_pr_number": "integer/string，update 必填"},
         returns={"data": "pr summary、created_or_updated、content_returned=false。", "evidence": "create/update 和必要 preflight 证据。"},
         example={"operation": "pr.publish", "repo": "owner/repo", "params": {"mode": "create", "head": "ai/fix", "base": "main", "title": "Fix CI", "body": "...", "expected_head_sha": "abc123", "confirm": True}},
@@ -444,7 +446,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_local_files=False,
         writes_remote=True,
         requires_cwd=False,
-        required_params={"pr_number": "integer/string，PR 编号", "body": "string，评论正文", "confirm": "boolean，必须 true"},
+        required_params={"pr_number": "integer/string，PR 编号", "body": "string，评论正文", "confirm": "boolean，必须是 JSON true"},
         optional_params={"max_body_chars": "integer，正文长度上限；默认 60000"},
         returns={"data": "comment summary、body_length、content_returned=false。", "evidence": "POST issue comments 调用证据。"},
         example={"operation": "pr.comment", "repo": "owner/repo", "params": {"pr_number": 42, "body": "CI failure summary", "confirm": True}},
@@ -452,14 +454,14 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
     ),
     "pr.merge": operation_spec(
         category="pr",
-        description="合并 PR。远端写操作；强制 expected_head_sha、base_branch、confirm。",
+        description="合并 PR。远端写操作；强制 expected_head_sha、base_branch、confirm；默认要求 head_sha CI 全部完成且 success。",
         repo_required=True,
         read_only_remote=False,
         writes_local_files=False,
         writes_remote=True,
         requires_cwd=False,
-        required_params={"pr_number": "integer/string，PR 编号", "expected_head_sha": "string，当前 PR head sha", "base_branch": "string，目标 base branch", "merge_method": "merge/rebase/rebase-merge/squash", "confirm": "boolean，必须 true"},
-        optional_params={"require_ci_success": "boolean，默认 true", "merge_title": "string", "merge_message": "string", "delete_branch_after_merge": "boolean"},
+        required_params={"pr_number": "integer/string，PR 编号", "expected_head_sha": "string，当前 PR head sha", "base_branch": "string，目标 base branch", "merge_method": "merge/rebase/rebase-merge/squash", "confirm": "boolean，必须是 JSON true"},
+        optional_params={"require_ci_success": "boolean，默认 true", "expected_run_ids": "array/string，期望纳入 gate 的 run ids", "ci_limit": "integer，head_sha CI runs 查询数量；默认 100", "merge_title": "string", "merge_message": "string", "delete_branch_after_merge": "boolean"},
         returns={"data": "pr summary、merge_response、content_returned=false。", "evidence": "PR preflight、CI check 和 merge 调用证据。"},
         example={"operation": "pr.merge", "repo": "owner/repo", "params": {"pr_number": 42, "expected_head_sha": "abc123", "base_branch": "main", "merge_method": "merge", "confirm": True}},
         risk_level="high",
@@ -687,7 +689,7 @@ async def ci_get_run_summary(client: GiteaClient, repo: str | None, params: dict
     suffix = f"/actions/runs/{path_segment(run_id)}/attempts/{path_segment(str(attempt))}/jobs" if attempt else f"/actions/runs/{path_segment(run_id)}/jobs"
     jobs_path = repo_path(repo, suffix)
     jobs_data, jobs_evidence = await client.request_json("GET", jobs_path, params=page_params(params), step="ci.get_run_summary.list_jobs")
-    jobs = expect_keyed_object_list(jobs_data, step="ci.get_run_summary.list_jobs", path=jobs_path, keys=("jobs", "workflow_jobs"))
+    jobs = expect_keyed_object_list(jobs_data, step="ci.get_run_summary.list_jobs", path=jobs_path, keys=("jobs",))
     jobs_evidence["result_count"] = len(jobs)
     evidence.append(jobs_evidence)
 
@@ -719,7 +721,7 @@ async def list_run_jobs(client: GiteaClient, repo: str | None, params: dict[str,
     suffix = f"/actions/runs/{path_segment(run_id)}/attempts/{path_segment(str(attempt))}/jobs" if attempt else f"/actions/runs/{path_segment(run_id)}/jobs"
     path = repo_path(repo, suffix)
     data, evidence = await client.request_json("GET", path, params=page_params(params), step="actions.list_run_jobs")
-    jobs = expect_keyed_object_list(data, step="actions.list_run_jobs", path=path, keys=("jobs", "workflow_jobs"))
+    jobs = expect_keyed_object_list(data, step="actions.list_run_jobs", path=path, keys=("jobs",))
     evidence["result_count"] = len(jobs)
     return ok_result(operation="actions.list_run_jobs", data=data, evidence=evidence, meta={"repo": repo})
 
@@ -861,7 +863,7 @@ async def ci_prepare_failure_context(client: GiteaClient, repo: str | None, para
     suffix = f"/actions/runs/{path_segment(run_id_str)}/attempts/{path_segment(str(attempt))}/jobs" if attempt else f"/actions/runs/{path_segment(run_id_str)}/jobs"
     jobs_path = repo_path(repo, suffix)
     jobs_data, jobs_evidence = await client.request_json("GET", jobs_path, params=job_params, step="ci.list_run_jobs")
-    jobs = expect_keyed_object_list(jobs_data, step="ci.list_run_jobs", path=jobs_path, keys=("jobs", "workflow_jobs"))
+    jobs = expect_keyed_object_list(jobs_data, step="ci.list_run_jobs", path=jobs_path, keys=("jobs",))
     jobs_evidence["result_count"] = len(jobs)
     evidence.append(jobs_evidence)
 
@@ -1003,18 +1005,18 @@ async def pr_preflight(client: GiteaClient, repo: str | None, params: dict[str, 
 async def workflow_rerun_job(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     require_confirm(params)
+    run_id = required_param(params, "run_id")
     job_id = required_param(params, "job_id")
     evidence: list[dict[str, Any]] = []
     job_path = repo_path(repo, f"/actions/jobs/{path_segment(job_id)}")
     job_data, job_evidence = await client.request_json("GET", job_path, step="workflow.rerun_job.get_job")
     job_obj = expect_object(job_data, step="workflow.rerun_job.get_job", path=job_path)
     evidence.append(job_evidence)
+    require_expected_match(require_job_run_id(job_obj, step="workflow.rerun_job.get_job"), run_id, field="run_id", step="workflow.rerun_job.get_job")
     require_expected_match(job_obj.get("status"), params.get("expected_status"), field="status", step="workflow.rerun_job.get_job")
     require_expected_match(job_obj.get("conclusion"), params.get("expected_conclusion"), field="conclusion", step="workflow.rerun_job.get_job")
-    if params.get("expected_run_id") is not None:
-        require_expected_match(job_run_id(job_obj), params.get("expected_run_id"), field="run_id", step="workflow.rerun_job.get_job")
 
-    rerun_path = repo_path(repo, f"/actions/jobs/{path_segment(job_id)}/rerun")
+    rerun_path = repo_path(repo, f"/actions/runs/{path_segment(run_id)}/jobs/{path_segment(job_id)}/rerun")
     rerun_data, rerun_evidence = await client.request_json("POST", rerun_path, json_body={}, step="workflow.rerun_job.post_rerun")
     rerun_response = expect_object_or_none(rerun_data, step="workflow.rerun_job.post_rerun", path=rerun_path)
     evidence.append(rerun_evidence)
@@ -1022,7 +1024,7 @@ async def workflow_rerun_job(client: GiteaClient, repo: str | None, params: dict
         operation="workflow.rerun_job",
         data={"job": compact_job(job_obj), "rerun_response": rerun_response, "content_returned": False},
         evidence=evidence,
-        meta={"repo": repo, "job_id": job_id},
+        meta={"repo": repo, "run_id": run_id, "job_id": job_id},
         next_suggested_operations=["ci.get_run_summary"],
     )
 
@@ -1064,7 +1066,7 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
         raise PlatformError("invalid_param", "params.inputs 必须是 object", {"param": "inputs", "actual_type": type(inputs).__name__})
     evidence: list[dict[str, Any]] = []
     dispatch_path = repo_path(repo, f"/actions/workflows/{path_segment(workflow_id)}/dispatches")
-    body: dict[str, Any] = {"ref": ref}
+    body: dict[str, Any] = {"ref": ref, "return_run_details": True}
     if inputs:
         body["inputs"] = inputs
     dispatch_data, dispatch_evidence = await client.request_json("POST", dispatch_path, json_body=body, step="workflow.dispatch_and_track.dispatch")
@@ -1082,6 +1084,7 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
     runs_evidence["result_count"] = len(candidates)
     evidence.append(runs_evidence)
     response_run_id = response_run_identifier(dispatch_response)
+    match_status = "dispatch_response_run_id" if response_run_id else ("ambiguous_candidate" if candidates else "no_candidate")
     return ok_result(
         operation="workflow.dispatch_and_track",
         data={
@@ -1089,12 +1092,13 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
             "dispatch_response_run_id": response_run_id,
             "candidate_count": len(candidates),
             "candidate_runs": [compact_run(run) for run in candidates],
-            "matched": "dispatch_response_run_id" if response_run_id else "candidate",
+            "matched": bool(response_run_id),
+            "match_status": match_status,
             "content_returned": False,
         },
         evidence=evidence,
         meta={"repo": repo, "workflow_id": workflow_id, "ref": ref},
-        next_suggested_operations=["ci.get_run_summary"] if candidates or response_run_id else [],
+        next_suggested_operations=["ci.get_run_summary"] if response_run_id else [],
     )
 
 
@@ -1177,12 +1181,12 @@ async def pr_merge(client: GiteaClient, repo: str | None, params: dict[str, Any]
     require_expected_match(require_response_field(base, "ref", step="pr.merge.get_pr", path=pr_path), base_branch, field="base.ref", step="pr.merge.get_pr")
     if bool_param(params, "require_ci_success", True):
         ci_path = repo_path(repo, "/actions/runs")
-        ci_params = {"head_sha": expected_head_sha, "limit": 20}
+        ci_params = {"head_sha": expected_head_sha, "limit": int_param(params, "ci_limit", 100, minimum=1)}
         runs_data, runs_evidence = await client.request_json("GET", ci_path, params=ci_params, step="pr.merge.list_head_ci_runs")
         runs = expect_keyed_object_list(runs_data, step="pr.merge.list_head_ci_runs", path=ci_path, keys=("workflow_runs",))
         runs_evidence["result_count"] = len(runs)
         evidence.append(runs_evidence)
-        ensure_ci_success_for_merge(runs)
+        ensure_ci_success_for_merge(runs, expected_run_ids=parse_expected_id_set(params.get("expected_run_ids")))
     merge_body: dict[str, Any] = {"Do": merge_method}
     if params.get("merge_title") is not None:
         merge_body["MergeTitleField"] = str(params["merge_title"])
@@ -1257,11 +1261,7 @@ def validate_request(operation: str, repo: str | None, params: dict[str, Any]) -
         if value is None or str(value).strip() == "":
             return PlatformError("missing_param", f"缺少 params.{name}", {"param": name})
     if spec["writes_remote"] and "confirm" in spec["required_params"]:
-        try:
-            confirmed = bool_param(params, "confirm", False)
-        except PlatformError as exc:
-            return exc
-        if not confirmed:
+        if params.get("confirm") is not True:
             return PlatformError("confirmation_required", "远端写 operation 需要 params.confirm=true", {"param": "confirm"})
     return None
 
@@ -1324,7 +1324,7 @@ def workflow_runs_path(repo: str, workflow_id: Any | None = None) -> str:
 
 
 def require_confirm(params: dict[str, Any]) -> None:
-    if not bool_param(params, "confirm", False):
+    if params.get("confirm") is not True:
         raise PlatformError("confirmation_required", "远端写 operation 需要 params.confirm=true", {"param": "confirm"})
 
 
@@ -1378,6 +1378,13 @@ def job_run_id(job: dict[str, Any]) -> Any:
     return None
 
 
+def require_job_run_id(job: dict[str, Any], *, step: str) -> Any:
+    value = job_run_id(job)
+    if value is None or str(value).strip() == "":
+        raise PlatformError("missing_response_field", "Gitea API 响应缺少 job 所属 run_id，拒绝执行 job rerun", {"step": step, "field": "run_id", "actual_keys": sorted(str(key) for key in job.keys())})
+    return value
+
+
 def pr_head_sha(pr: dict[str, Any]) -> str | None:
     head = pr.get("head")
     if isinstance(head, dict) and head.get("sha"):
@@ -1387,15 +1394,55 @@ def pr_head_sha(pr: dict[str, Any]) -> str | None:
     return None
 
 
-def ensure_ci_success_for_merge(runs: list[dict[str, Any]]) -> None:
+def parse_expected_id_set(value: Any) -> set[str]:
+    if value is None or value == "":
+        return set()
+    if isinstance(value, list):
+        return {str(item).strip() for item in value if str(item).strip()}
+    return {part.strip() for part in str(value).split(",") if part.strip()}
+
+
+def run_identity(run: dict[str, Any]) -> str | None:
+    value = run.get("id") or run.get("run_id")
+    return str(value) if value is not None and str(value).strip() else None
+
+
+def run_state_for_merge(run: dict[str, Any]) -> str:
+    conclusion = str(run.get("conclusion") or "").lower()
+    status = str(run.get("status") or "").lower()
+    if conclusion in _NONTERMINAL_RUN_STATES or status in _NONTERMINAL_RUN_STATES:
+        return "nonterminal"
+    if conclusion:
+        return "success" if conclusion == "success" else "not_success"
+    if status == "success":
+        return "success"
+    if status in _FAILED_STATUSES or status in {"failure", "cancelled", "timed_out"}:
+        return "not_success"
+    return "unknown"
+
+
+def ensure_ci_success_for_merge(runs: list[dict[str, Any]], *, expected_run_ids: set[str] | None = None) -> None:
     if not runs:
         raise PlatformError("ci_required", "require_ci_success=true 但未找到 head_sha 对应 CI runs", {})
-    failed = [compact_run(run) for run in runs if is_failed_run(run)]
-    if failed:
-        raise PlatformError("ci_not_success", "head_sha 存在失败或取消的 CI run，拒绝合并", {"failed_runs": failed})
-    succeeded = [run for run in runs if str(run.get("conclusion") or run.get("status") or "").lower() == "success"]
-    if not succeeded:
-        raise PlatformError("ci_not_success", "require_ci_success=true 但未找到 success CI run", {"run_count": len(runs)})
+    if expected_run_ids:
+        found = {identity for run in runs if (identity := run_identity(run))}
+        missing = sorted(expected_run_ids - found)
+        if missing:
+            raise PlatformError("ci_expected_runs_missing", "require_ci_success=true 但缺少 expected_run_ids 对应 CI runs", {"missing_run_ids": missing, "found_run_ids": sorted(found)})
+        checked_runs = [run for run in runs if run_identity(run) in expected_run_ids]
+    else:
+        checked_runs = runs
+    nonterminal = [compact_run(run) for run in checked_runs if run_state_for_merge(run) == "nonterminal"]
+    if nonterminal:
+        raise PlatformError("ci_not_complete", "head_sha 存在 queued/in_progress/pending CI run，拒绝合并", {"nonterminal_runs": nonterminal})
+    not_success = [compact_run(run) for run in checked_runs if run_state_for_merge(run) == "not_success"]
+    if not_success:
+        raise PlatformError("ci_not_success", "head_sha 存在非 success CI run，拒绝合并", {"runs": not_success})
+    unknown = [compact_run(run) for run in checked_runs if run_state_for_merge(run) == "unknown"]
+    if unknown:
+        raise PlatformError("ci_state_unknown", "head_sha 存在未知状态 CI run，拒绝合并", {"unknown_runs": unknown})
+    if not checked_runs:
+        raise PlatformError("ci_required", "require_ci_success=true 但没有可校验 CI runs", {})
 
 
 def workspace_root(params: dict[str, Any]) -> Path:
