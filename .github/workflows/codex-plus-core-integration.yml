@@ -1,0 +1,36 @@
+name: codex-plus-core integration
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/codex-plus-core-integration.yml"
+      - "localgpt/**"
+      - "build/CodexPlusPlus-localgpt/Cargo.toml"
+      - "build/CodexPlusPlus-localgpt/Cargo.lock"
+      - "build/CodexPlusPlus-localgpt/crates/codex-plus-core/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/codex-plus-core-integration.yml"
+      - "localgpt/**"
+      - "build/CodexPlusPlus-localgpt/Cargo.toml"
+      - "build/CodexPlusPlus-localgpt/Cargo.lock"
+      - "build/CodexPlusPlus-localgpt/crates/codex-plus-core/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codex-plus-core-integration:
+    name: codex-plus-core integration
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check codex-plus-core with LocalGPT path dependency
+        run: cargo check --manifest-path build/CodexPlusPlus-localgpt/Cargo.toml -p codex-plus-core --all-targets
