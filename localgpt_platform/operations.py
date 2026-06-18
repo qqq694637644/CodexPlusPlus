@@ -276,20 +276,6 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         example={"operation": "actions.list_runners", "repo": "owner/repo", "params": {"disabled": False}},
         risk_level="low",
     ),
-    "ci.get_run_summary": operation_spec(
-        category="ci",
-        description="读取单个 workflow run 并组合 jobs 紧凑摘要，不下载日志。",
-        repo_required=True,
-        read_only_remote=True,
-        writes_local_files=False,
-        writes_remote=False,
-        requires_cwd=False,
-        required_params={"run_id": "integer/string，workflow run id"},
-        optional_params={"attempt": "integer/string，指定 run attempt jobs", "page": "integer，jobs 页码", "limit": "integer，jobs 每页数量"},
-        returns={"data": "run、jobs、job_count、failed_job_count、queued_in_progress_job_count、content_returned=false。", "evidence": "GET run 和 list jobs 调用证据。"},
-        example={"operation": "ci.get_run_summary", "repo": "owner/repo", "params": {"run_id": 123}},
-        risk_level="low",
-    ),
     "ci.prepare_failure_context": operation_spec(
         category="ci",
         description="定位失败 run，列出失败 jobs，并把失败 job 日志下载到 cwd/jobs/<job_id>/job.log。",
@@ -586,44 +572,6 @@ async def list_runners(client: GiteaClient, repo: str | None, params: dict[str, 
     runners = expect_keyed_object_list(data, step="actions.list_runners", path=path, keys=("runners",))
     evidence["result_count"] = len(runners)
     return ok_result(operation="actions.list_runners", data=data, evidence=evidence, meta={"repo": repo})
-
-
-async def ci_get_run_summary(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
-    require_repo(repo)
-    run_id = required_param(params, "run_id")
-    evidence: list[dict[str, Any]] = []
-
-    run_path = repo_path(repo, f"/actions/runs/{path_segment(run_id)}")
-    run_data, run_evidence = await client.request_json("GET", run_path, step="ci.get_run")
-    run_obj = expect_object(run_data, step="ci.get_run", path=run_path)
-    evidence.append(run_evidence)
-
-    attempt = params.get("attempt")
-    suffix = f"/actions/runs/{path_segment(run_id)}/attempts/{path_segment(str(attempt))}/jobs" if attempt else f"/actions/runs/{path_segment(run_id)}/jobs"
-    jobs_path = repo_path(repo, suffix)
-    jobs_data, jobs_evidence = await client.request_json("GET", jobs_path, params=page_params(params), step="ci.list_run_jobs")
-    jobs = expect_keyed_object_list(jobs_data, step="ci.list_run_jobs", path=jobs_path, keys=("jobs", "workflow_jobs"))
-    jobs_evidence["result_count"] = len(jobs)
-    evidence.append(jobs_evidence)
-
-    failed_jobs = [job for job in jobs if is_failed_job(job)]
-    queued_or_running_jobs = [job for job in jobs if is_queued_or_running_job(job)]
-    next_ops = ["ci.prepare_failure_context"] if failed_jobs else []
-
-    return ok_result(
-        operation="ci.get_run_summary",
-        data={
-            "run": compact_run(run_obj),
-            "jobs": [compact_job(job) for job in jobs],
-            "job_count": len(jobs),
-            "failed_job_count": len(failed_jobs),
-            "queued_in_progress_job_count": len(queued_or_running_jobs),
-            "content_returned": False,
-        },
-        evidence=evidence,
-        meta={"repo": repo, "run_id": run_id, "attempt": attempt},
-        next_suggested_operations=next_ops,
-    )
 
 
 async def ci_prepare_failure_context(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
@@ -1087,11 +1035,6 @@ def is_failed_job(job: dict[str, Any]) -> bool:
     return conclusion in _FAILED_CONCLUSIONS or status in _FAILED_STATUSES
 
 
-def is_queued_or_running_job(job: dict[str, Any]) -> bool:
-    status = str(job.get("status") or "").lower()
-    return status in {"queued", "pending", "waiting", "in_progress", "running"}
-
-
 def is_failed_run(run: dict[str, Any]) -> bool:
     conclusion = str(run.get("conclusion") or "").lower()
     status = str(run.get("status") or "").lower()
@@ -1145,7 +1088,6 @@ HANDLERS: dict[str, OperationHandler] = {
     "actions.list_artifacts": list_artifacts,
     "actions.download_artifact": download_artifact,
     "actions.list_runners": list_runners,
-    "ci.get_run_summary": ci_get_run_summary,
     "ci.prepare_failure_context": ci_prepare_failure_context,
     "artifact.sync_for_run": artifact_sync_for_run,
     "pr.preflight": pr_preflight,

@@ -16,7 +16,6 @@ from localgpt_platform.operations import (
     HANDLERS,
     OPERATION_SPECS,
     artifact_sync_for_run,
-    ci_get_run_summary,
     ci_prepare_failure_context,
     describe_operations,
     download_artifact,
@@ -152,9 +151,6 @@ async def main() -> None:
     full = describe_operations(operation="ci.prepare_failure_context", detail="full")
     assert full["ok"] is True
     assert full["operation"]["writes_local_files"] is True
-    summary_schema = describe_operations(operation="ci.get_run_summary", detail="full")
-    assert summary_schema["ok"] is True
-    assert summary_schema["operation"]["writes_local_files"] is False
 
     forbidden = await execute_operation("actions.download_artifact", repo="owner/repo", params={"target_dir": "x"})
     assert forbidden["ok"] is False
@@ -169,10 +165,6 @@ async def main() -> None:
     assert combo_typo["error"]["code"] == "unknown_param", combo_typo
     assert combo_typo["error"]["details"]["unknown_params"] == ["runid"], combo_typo
     assert "run_id" in combo_typo["error"]["details"]["allowed_params"], combo_typo
-    summary_typo = await execute_operation("ci.get_run_summary", repo="owner/repo", params={"runid": 10})
-    assert summary_typo["ok"] is False
-    assert summary_typo["error"]["code"] == "unknown_param", summary_typo
-    assert summary_typo["error"]["details"]["unknown_params"] == ["runid"], summary_typo
     missing = await execute_operation("ci.prepare_failure_context", repo="owner/repo", params={})
     assert missing["ok"] is False
     assert missing["error"]["code"] == "missing_param", missing
@@ -194,13 +186,6 @@ async def main() -> None:
     assert pr["ok"] is True
     assert pr["data"]["head_sha"] == "abc"
     assert pr["next_suggested_operations"] == ["ci.prepare_failure_context"]
-    summary = await ci_get_run_summary(client, "owner/repo", {"run_id": 10})
-    assert summary["ok"] is True
-    assert summary["data"]["job_count"] == 1
-    assert summary["data"]["failed_job_count"] == 1
-    assert summary["data"]["queued_in_progress_job_count"] == 0
-    assert summary["data"]["content_returned"] is False
-    assert summary["next_suggested_operations"] == ["ci.prepare_failure_context"]
 
     with tempfile.TemporaryDirectory() as tmp:
         ci = await ci_prepare_failure_context(client, "owner/repo", {"cwd": tmp, "run_id": 10})
@@ -226,7 +211,6 @@ async def main() -> None:
         assert any(item.get("temporary_zip_deleted") is True for item in single["evidence"]), single
         assert not list(Path(single["data"]["artifact_dir"]).glob("*.zip")), single
 
-        await expect_shape_error(ci_get_run_summary(FakeGiteaClient(broken="jobs"), "owner/repo", {"run_id": 10}))
         await expect_shape_error(ci_prepare_failure_context(FakeGiteaClient(broken="jobs"), "owner/repo", {"cwd": tmp, "run_id": 10}))
         await expect_shape_error(artifact_sync_for_run(FakeGiteaClient(broken="artifacts"), "owner/repo", {"cwd": tmp, "run_id": 10}))
         await expect_shape_error(pr_preflight(FakeGiteaClient(broken="pr_files"), "owner/repo", {"pr_number": 7}))

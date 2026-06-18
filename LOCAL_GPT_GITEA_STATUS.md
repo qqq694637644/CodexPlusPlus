@@ -80,27 +80,6 @@ actions.download_artifact
 - 成功解压后必须删除临时 zip。
 - 返回值不包含 `zip_path`、`transport_zip_path`、`retained_zip_paths`。
 
-### CI Run 摘要
-
-```text
-ci.get_run_summary
-```
-
-当前行为：
-
-- 查询单个 run。
-- 查询 run jobs。
-- 返回 run + jobs 的紧凑摘要。
-- 返回 `job_count`、`failed_job_count`、`queued_in_progress_job_count`。
-- 如果存在失败 job，返回 `next_suggested_operations=["ci.prepare_failure_context"]`。
-
-不做：
-
-- 不下载日志。
-- 不列 artifacts。
-- 不写本地文件。
-- 不修改远端。
-
 ### CI 失败上下文组合
 
 ```text
@@ -171,7 +150,29 @@ pr.preflight
 
 ## 待实现 Operation
 
-### 1. `ci.find_run_candidates`
+### 1. `ci.get_run_summary`
+
+目标：
+
+- 查询单个 run。
+- 查询 jobs。
+- 返回 run + jobs 的紧凑摘要。
+- 不下载日志。
+
+返回建议：
+
+- run compact summary。
+- jobs compact summary。
+- failed/cancelled/timed_out job count。
+- queued/in_progress job count。
+- 失败时给出 `next_suggested_operations=["ci.prepare_failure_context"]`。
+
+不实现条件：
+
+- 如果只是 `actions.get_run` 的薄 wrapper，不实现。
+- 如果不组合 jobs 摘要，不实现。
+
+### 2. `ci.find_run_candidates`
 
 目标：
 
@@ -185,7 +186,7 @@ pr.preflight
 - 如果只是 `actions.list_runs` 的薄 wrapper，不实现。
 - 如果没有候选排序、紧凑摘要或下一步建议价值，不实现。
 
-### 2. `runner.diagnose_queue`
+### 3. `runner.diagnose_queue`
 
 目标：
 
@@ -198,7 +199,7 @@ pr.preflight
 - 如果无法从 Gitea 官方 API 获取 runner 状态，不实现。
 - 如果只是 `actions.list_runners` 的薄 wrapper，不实现。
 
-### 3. `workflow.rerun_job`
+### 4. `workflow.rerun_job`
 
 目标：
 
@@ -216,7 +217,7 @@ pr.preflight
 - 如果目标 Gitea 官方 API 不支持，不实现。
 - 不通过内部 API 实现。
 
-### 4. `workflow.rerun_run`
+### 5. `workflow.rerun_run`
 
 目标：
 
@@ -228,7 +229,7 @@ pr.preflight
 - 如果目标 Gitea 官方 API 不支持，不实现。
 - 不藏进 `ci.prepare_failure_context`。
 
-### 5. `workflow.dispatch_and_track`
+### 6. `workflow.dispatch_and_track`
 
 目标：
 
@@ -249,7 +250,7 @@ pr.preflight
 - 如果 dispatch API 不稳定或不属于官方 API，不实现。
 - 如果无法给出候选匹配证据，不实现。
 
-### 6. `pr.publish`
+### 7. `pr.publish`
 
 目标：
 
@@ -271,7 +272,7 @@ pr.preflight
 - 如果需要本地 commit/push，交给 Codex git，不在 MCP 内实现。
 - 开发阶段不做宽泛 `upsert`，先做 `create`，再做 `update`。
 
-### 7. `pr.comment`
+### 8. `pr.comment`
 
 目标：
 
@@ -289,7 +290,7 @@ pr.preflight
 
 - 不让 CI 诊断组合 operation 自动评论。
 
-### 8. `pr.merge`
+### 9. `pr.merge`
 
 目标：
 
@@ -310,7 +311,7 @@ pr.preflight
 - 如果没有 `expected_head_sha`，不实现或不允许执行。
 - 不隐藏在 `pr.publish` 或 `pr.preflight` 中。
 
-### 9. cache 相关能力
+### 10. cache 相关能力
 
 候选：
 
@@ -344,16 +345,17 @@ cache.delete
 建议顺序：
 
 ```text
-1. ci.find_run_candidates
-2. runner.diagnose_queue
-3. workflow.rerun_job
-4. workflow.rerun_run
-5. workflow.dispatch_and_track
-6. pr.publish
-7. pr.comment
-8. pr.merge
-9. cache.diagnose / cache.list
-10. cache.plan_delete / cache.delete
+1. ci.get_run_summary
+2. ci.find_run_candidates
+3. runner.diagnose_queue
+4. workflow.rerun_job
+5. workflow.rerun_run
+6. workflow.dispatch_and_track
+7. pr.publish
+8. pr.comment
+9. pr.merge
+10. cache.diagnose / cache.list
+11. cache.plan_delete / cache.delete
 ```
 
 原则：
