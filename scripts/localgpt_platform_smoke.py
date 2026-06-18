@@ -370,6 +370,7 @@ async def main() -> None:
     dispatch = await workflow_dispatch_and_track(client, "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
     assert dispatch["ok"] is True
     client.assert_called("POST", "/repos/owner/repo/actions/workflows/ci.yml/dispatches", params={"return_run_details": True}, json_body={"ref": "main"})
+    client.assert_called("GET", "/repos/owner/repo/actions/workflows/ci.yml/runs", params={"branch": "main", "limit": 10})
     assert dispatch["data"]["workflow_run_id"] == "11"
     assert dispatch["data"]["dispatch_run_details"]["workflow_run_id"] == "11"
     assert dispatch["data"]["matched"] is True
@@ -386,6 +387,22 @@ async def main() -> None:
         "/repos/owner/repo/actions/workflows/ci.yml/dispatches",
         params={"return_run_details": True},
         json_body={"ref": "main", "inputs": {"env": "prod", "debug": "true"}},
+    )
+    dispatch_full_ref_client = FakeGiteaClient()
+    dispatch_full_ref = await workflow_dispatch_and_track(dispatch_full_ref_client, "owner/repo", {"workflow_id": "ci.yml", "ref": "refs/heads/main", "confirm": True})
+    assert dispatch_full_ref["ok"] is True
+    dispatch_full_ref_client.assert_called(
+        "GET",
+        "/repos/owner/repo/actions/workflows/ci.yml/runs",
+        params={"branch": "main", "limit": 10},
+    )
+    dispatch_tag_ref_client = FakeGiteaClient()
+    dispatch_tag_ref = await workflow_dispatch_and_track(dispatch_tag_ref_client, "owner/repo", {"workflow_id": "ci.yml", "ref": "refs/tags/v1.0.0", "confirm": True})
+    assert dispatch_tag_ref["ok"] is True
+    dispatch_tag_ref_client.assert_called(
+        "GET",
+        "/repos/owner/repo/actions/workflows/ci.yml/runs",
+        params={"limit": 10},
     )
     try:
         await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_no_run_id"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})

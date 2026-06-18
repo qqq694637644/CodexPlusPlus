@@ -94,6 +94,16 @@ def workflow_runs_path(repo: str, workflow_id: Any | None = None) -> str:
         return repo_path(repo, "/actions/runs")
     return repo_path(repo, f"/actions/workflows/{path_segment(str(workflow_id).strip())}/runs")
 
+def branch_query_from_dispatch_ref(ref: str) -> str | None:
+    if ref.startswith("refs/heads/"):
+        branch = ref.removeprefix("refs/heads/")
+        return branch or None
+    if ref.startswith("refs/tags/"):
+        return None
+    if ref.startswith("refs/"):
+        return None
+    return ref or None
+
 def require_confirm(params: dict[str, Any]) -> None:
     if params.get("confirm") is not True:
         raise PlatformError("confirmation_required", "远端写 operation 需要 params.confirm=true", {"param": "confirm"})

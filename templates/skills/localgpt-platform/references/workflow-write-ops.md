@@ -28,4 +28,4 @@ Reads the run first, verifies required `expected_head_sha` and optional status/c
 
 ## `workflow.dispatch_and_track`
 
-Dispatches a workflow with query parameter `return_run_details=true`, then requires the Gitea `RunDetails` response field `workflow_run_id`. Optional `inputs` must be `object[string,string]`; booleans, numbers, arrays, nested objects, and non-string keys are rejected before calling Gitea. It also queries candidate runs by workflow/ref/actor/created_after for context, but a definite match comes from `workflow_run_id` only.
+Dispatches a workflow with query parameter `return_run_details=true`, then requires the Gitea `RunDetails` response field `workflow_run_id`. Optional `inputs` must be `object[string,string]`; booleans, numbers, arrays, nested objects, and non-string keys are rejected before calling Gitea. Candidate run lookup normalizes `refs/heads/<branch>` to `branch=<branch>` and omits `branch` for tag or other full refs. The definite match still comes from `workflow_run_id` only.

@@ -6,6 +6,7 @@ from localgpt_platform.gitea import GiteaClient, repo_path
 from localgpt_platform.result import PlatformError, ok_result
 
 from .schemas import (
+    branch_query_from_dispatch_ref,
     compact_job,
     compact_run,
     expect_object,
@@ -101,7 +102,10 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
 
     runs_path = workflow_runs_path(repo, workflow_id)
     candidate_limit = int_param(params, "candidate_limit", 10, minimum=1)
-    run_params = {"branch": ref, "limit": candidate_limit}
+    run_params: dict[str, Any] = {"limit": candidate_limit}
+    branch = branch_query_from_dispatch_ref(ref)
+    if branch:
+        run_params["branch"] = branch
     if params.get("actor"):
         run_params["actor"] = params["actor"]
     runs_data, runs_evidence = await client.request_json("GET", runs_path, params=run_params, step="workflow.dispatch_and_track.list_candidate_runs")
