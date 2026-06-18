@@ -52,7 +52,7 @@ tool_timeout_sec = 60
 | `GITEA_TIMEOUT` | 否 | 请求超时秒数，默认 `30` |
 | `GITEA_VERIFY_SSL` | 否 | 是否校验证书，默认 `true` |
 
-`actions.get_job_log` 和 `actions.download_artifact` 需要传入当前 Codex workspace 的 `cwd` 参数，并固定写入：
+`actions.download_job_log` 和 `actions.download_artifact` 需要传入当前 Codex workspace 的 `cwd` 参数，并固定写入：
 
 ```text
 {cwd}/jobs/{job_id}/job.log
@@ -83,7 +83,7 @@ tool_timeout_sec = 60
 ```json
 {
   "ok": true,
-  "operation": "actions.get_job_log",
+  "operation": "actions.download_job_log",
   "data": {
     "job_id": "123",
     "log_path": "D:\\work\\repo\\jobs\\123\\job.log",
@@ -107,7 +107,7 @@ tool_timeout_sec = 60
 ```json
 {
   "ok": false,
-  "operation": "actions.get_job_log",
+  "operation": "actions.download_job_log",
   "error": {
     "code": "missing_token",
     "message": "缺少 GITEA_TOKEN 环境变量"
@@ -143,7 +143,7 @@ python -m localgpt_platform execute --input-json request.json
 
 ```json
 {
-  "operation": "actions.get_job_log",
+  "operation": "actions.download_job_log",
   "repo": "owner/repo",
   "params": {
     "cwd": "D:\\work\\repo",

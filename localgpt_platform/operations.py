@@ -92,7 +92,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         "optional_params": {},
         "example": {"operation": "actions.get_job", "repo": "owner/repo", "params": {"job_id": 456}},
     },
-    "actions.get_job_log": {
+    "actions.download_job_log": {
         "description": "下载单个 job 日志到 cwd/jobs/<job_id>/job.log，只返回文件路径和大小。",
         "repo_required": True,
         "required_params": {
@@ -100,7 +100,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
             "job_id": "integer/string，job id",
         },
         "optional_params": {},
-        "example": {"operation": "actions.get_job_log", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456}},
+        "example": {"operation": "actions.download_job_log", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456}},
     },
     "actions.list_artifacts": {
         "description": "列出仓库或 run 的 artifacts。",
@@ -267,7 +267,7 @@ async def get_job(client: GiteaClient, repo: str | None, params: dict[str, Any])
     return ok_result(operation="actions.get_job", data=data, evidence=evidence, meta={"repo": repo})
 
 
-async def get_job_log(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
+async def download_job_log(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     job_id = required_param(params, "job_id")
     cwd = workspace_root(params)
@@ -283,7 +283,7 @@ async def get_job_log(client: GiteaClient, repo: str | None, params: dict[str, A
     evidence["download_path"] = str(log_path)
     evidence["bytes"] = log_path.stat().st_size
     return ok_result(
-        operation="actions.get_job_log",
+        operation="actions.download_job_log",
         data={
             "job_id": job_id,
             "cwd": str(cwd),
@@ -461,7 +461,7 @@ HANDLERS: dict[str, OperationHandler] = {
     "actions.get_run": get_run,
     "actions.list_run_jobs": list_run_jobs,
     "actions.get_job": get_job,
-    "actions.get_job_log": get_job_log,
+    "actions.download_job_log": download_job_log,
     "actions.list_artifacts": list_artifacts,
     "actions.download_artifact": download_artifact,
     "actions.list_runners": list_runners,
