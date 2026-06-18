@@ -1,62 +1,205 @@
-**核心约束**
-- 顶层 MCP 工具保持 3 个：`gitea_status`、`gitea_describe_operations`、`gitea_execute`。
-- 不新增大量 `gitea_xxx` 顶层工具。
-- operation 分三类：原子读操作、组合读操作、显式写操作。
-- job log 和 artifact 不返回正文，固定落盘。
-- 本项目路径约束优先：使用 `{cwd}/jobs/<job_id>/...`，不要混回 `.gpt-artifacts/runs/...`，除非后续明确迁移。
+# LocalGPT Gitea MCP 设计说明
 
-**顶层工具设计**
-`gitea_status`
-- 检查 Gitea API 可达性、版本、认证状态。
-- 不做 repo 级查询。
-- 返回最小健康信息。
+## 定位
 
-`gitea_describe_operations`
-- 支持渐进披露。
-- 参数建议：
-  - `category`：可选，`ci`、`actions`、`artifact`、`pr`、`workflow`、`runner`、`cache`
-  - `operation`：可选，传入时返回单个 operation 完整 schema
-  - `detail`：`brief` 或 `full`
-- `brief` 只返回名称、描述、读写属性。
-- `full` 返回完整参数 schema、返回结构、示例、风险等级。
+这个 MCP 是给 Codex 本地 workspace 使用的 Gitea 平台能力补充。
 
-`gitea_execute`
-- 唯一执行入口。
-- 输入：`operation`、`repo`、`params`。
-- 所有 operation 必须先在 registry 中声明 metadata。
-- 不允许执行 registry 外 operation。
+Codex 已经具备本地能力：
 
-**Operation Metadata 必须字段**
-每个 operation 都要声明：
+- 阅读、搜索、修改代码。
+- 运行 shell、测试、构建、lint。
+- 使用本地 `git` 做 status、diff、branch、commit、push。
+- 用现有编辑工具做 patch 和文件写入。
+
+所以 Gitea MCP 不重复这些能力。它只负责 Codex 本地拿不到或不应该靠猜的远端平台信息：
+
+- Gitea API 可达性和认证状态。
+- 仓库、PR、Actions workflow/run/job/runner 元数据。
+- CI job log 下载到本地文件。
+- Actions artifact 同步到本地文件。
+- 组合查询，把修 CI 所需的远端证据一次准备好。
+
+一句话：
+
+> Codex 负责读代码、改代码、跑测试、提交；Gitea MCP 负责查远端事实、下载日志和 artifact。
+
+## 顶层 MCP 工具
+
+当前保持三个顶层工具：
 
 ```text
-name
-category
-description
-repo_required
-read_only_remote
-writes_local_files
-writes_remote
-requires_cwd
-required_params
-optional_params
-returns
-example
-risk_level
+gitea_status
+gitea_describe_operations
+gitea_execute
 ```
 
-关键布尔字段：
+不要把每个 Gitea endpoint 拆成顶层 MCP tool。operation 通过 `gitea_execute` 扩展。
+
+## 已实现功能
+
+### 状态与描述
 
 ```text
-read_only_remote
-writes_local_files
-writes_remote
+server.version
+auth.whoami
+repo.get
 ```
 
-审查标准：任何写远端的 operation 必须 `writes_remote=true`，名字也必须显式体现副作用，例如 `publish`、`dispatch`、`rerun`、`delete`、`merge`。
+用途：
 
-**统一返回结构**
-所有 operation 返回同一形态：
+- 检查 Gitea 版本。
+- 检查当前 token 对应用户。
+- 查询仓库元数据。
+
+### Actions / CI 原子查询
+
+```text
+actions.list_workflows
+actions.get_workflow
+actions.list_runs
+actions.get_run
+actions.list_run_jobs
+actions.get_job
+actions.list_artifacts
+actions.list_runners
+```
+
+用途：
+
+- 查 workflow。
+- 查 run。
+- 查 job。
+- 查 artifact 列表。
+- 查 repo 级 runner。
+
+这些 operation 只读远端，不写本地文件。
+
+### Job Log 下载
+
+```text
+actions.download_job_log
+```
+
+用途：
+
+- 从 Gitea 下载单个 job log。
+- 写入本地 workspace。
+- MCP 只返回路径和大小，不返回日志正文。
+
+落盘路径：
+
+```text
+{cwd}/jobs/<job_id>/job.log
+```
+
+Codex 后续直接用 shell 搜日志，例如：
+
+```powershell
+Select-String -Path .\jobs\<job_id>\job.log -Pattern "error|failed|panic|traceback|exception" -Context 3,3
+Get-Content .\jobs\<job_id>\job.log -Tail 200
+```
+
+不需要做 `log.search` MCP operation。Codex 本地 shell 已经能完成，而且更灵活。
+
+### Artifact 下载
+
+```text
+actions.download_artifact
+```
+
+用途：
+
+- 下载单个 artifact。
+- 解压到当前 workspace 的 job 目录。
+- 写 manifest。
+- MCP 返回路径、文件数量和 evidence，不返回 artifact 内容。
+
+落盘路径：
+
+```text
+{cwd}/jobs/<job_id>/artifact/
+{cwd}/jobs/<job_id>/artifact/<artifact_name>.zip
+{cwd}/jobs/<job_id>/artifact/manifest.json
+```
+
+Codex 后续用 shell 查看文件树、搜索、读取相关报告即可。
+
+### CI 失败上下文组合
+
+```text
+ci.prepare_failure_context
+```
+
+用途：
+
+- 定位一个失败 run。
+- 查询 run jobs。
+- 找失败 job。
+- 下载失败 job log 到本地。
+- 可选列出该 run 的 artifacts。
+- 返回 run 摘要、失败 job 摘要、log 路径、artifact 候选和 evidence。
+
+它不做：
+
+- 不判断根因。
+- 不 rerun workflow。
+- 不评论 PR。
+- 不修改远端。
+- 不返回完整日志正文。
+
+这是当前最重要的组合 operation。
+
+### Artifact 批量同步
+
+```text
+artifact.sync_for_run
+```
+
+用途：
+
+- 列出某个 run 的 artifacts。
+- 按名称模式筛选。
+- 下载并解压选中 artifacts。
+- 写本地 manifest。
+
+默认落盘路径：
+
+```text
+{cwd}/jobs/run-<run_id>/artifact/
+```
+
+如果调用方提供 `job_id`，则落到：
+
+```text
+{cwd}/jobs/<job_id>/artifact/
+```
+
+### PR 前置检查
+
+```text
+pr.preflight
+```
+
+用途：
+
+- 查询 PR metadata。
+- 查询 base/head/head_sha。
+- 查询 changed files 摘要。
+- 查询 head_sha 对应 CI runs。
+
+它不做：
+
+- 不 checkout。
+- 不 fetch。
+- 不 merge。
+- 不评论。
+- 不改 PR。
+
+本地分支、checkout、diff、提交仍由 Codex 直接使用 `git` 完成。
+
+## 当前返回结构
+
+所有 operation 统一返回：
 
 ```text
 ok
@@ -69,261 +212,221 @@ next_suggested_operations
 error
 ```
 
-成功时：
-- `ok=true`
-- `data` 放紧凑业务结果
-- `evidence` 放真实 API 调用证据
-- `warnings` 放非致命问题
-- `next_suggested_operations` 给 GPT-5.5 下一步候选，不替它决策
+设计重点：
 
-失败时：
-- `ok=false`
-- `error.code`
-- `error.message`
-- `error.details`
-- 不抛大段 traceback 给模型
+- `data` 放紧凑结果和本地路径。
+- `evidence` 放真实 Gitea API 调用证据。
+- 大日志和 artifact 内容只落盘，不进模型上下文。
+- `ok=false` 时看 `error.code`、`error.message`、`error.details`。
 
-**Evidence 结构**
-组合 operation 内部每次 API 调用都必须有 evidence entry：
+## 当前 skill 结构
+
+已拆成渐进式披露：
 
 ```text
-step
-method
-path
-status_code
-params_summary
-download_path
-bytes
-```
-
-注意：
-- 不记录 token。
-- 不记录 secret。
-- 不记录完整 response body。
-- 对分页调用要记录 page/limit 和结果数量。
-
-**本地文件落盘规范**
-当前项目统一使用：
-
-```text
-{cwd}/jobs/<job_id>/job.log
-{cwd}/jobs/<job_id>/artifact/
-{cwd}/jobs/<job_id>/artifact/<artifact_name>.zip
-{cwd}/jobs/<job_id>/artifact/manifest.json
-```
-
-规则：
-- `cwd` 必须由调用方显式传入。
-- `cwd` 必须是已存在目录。
-- 所有写入路径必须 `relative_to(cwd)`。
-- 禁止 `target_dir`。
-- 禁止任意绝对输出路径。
-- zip 解压必须防 zip-slip。
-
-**第一批原子 Operation**
-保留这些原子能力：
-
-```text
-server.version
-auth.whoami
-repo.get
-
-actions.list_workflows
-actions.get_workflow
-actions.list_runs
-actions.get_run
-actions.list_run_jobs
-actions.get_job
-actions.download_job_log
-actions.list_artifacts
-actions.download_artifact
-actions.list_runners
-```
-
-注意语义：
-- `actions.download_job_log`，不是 `get_job_log`。
-- 因为它有本地写文件副作用。
-- metadata 应该是：
-  - `read_only_remote=true`
-  - `writes_local_files=true`
-  - `writes_remote=false`
-
-**第一批组合 Operation**
-优先做这三个：
-
-1. `ci.prepare_failure_context`
-2. `artifact.sync_for_run`
-3. `pr.preflight`
-
-`ci.prepare_failure_context`
-- 输入：
-  - `repo`
-  - `cwd`
-  - `run_id`，或 `branch/head_sha/status`
-- 内部：
-  - 定位 run
-  - 获取 run summary
-  - list jobs
-  - 找 failed/cancelled/timed_out jobs
-  - 下载失败 job log 到 `{cwd}/jobs/<job_id>/job.log`
-  - 可选列出 artifacts
-- 返回：
-  - run summary
-  - failed jobs
-  - log paths
-  - artifact candidates
-  - evidence[]
-  - next_suggested_operations
-- 不做：
-  - 不 rerun
-  - 不评论 PR
-  - 不判断根因
-  - 不返回完整日志
-
-`artifact.sync_for_run`
-- 输入：
-  - `repo`
-  - `cwd`
-  - `run_id`
-  - 可选 artifact name pattern
-- 内部：
-  - list artifacts
-  - 下载选中的 artifacts
-  - 解压到 job 或 run 关联目录
-  - 写 manifest
-- 返回：
-  - manifest path
-  - artifact dirs
-  - zip paths
-  - file count
-  - evidence[]
-- 注意：如果 artifact 无法映射到 job，可放到 `{cwd}/jobs/run-<run_id>/artifact/`，但必须在 schema 中明确。
-
-`pr.preflight`
-- 输入：
-  - `repo`
-  - `pr_number`
-- 内部：
-  - 获取 PR metadata
-  - 获取 base/head/head_sha
-  - 获取 changed files summary
-  - 查询 head_sha 相关 CI runs
-- 返回：
-  - PR state
-  - base/head/head_sha
-  - changed files summary
-  - ci summary
-  - evidence[]
-- 不做：
-  - 不 checkout
-  - 不 fetch
-  - 不 merge
-  - 不评论
-
-**第二批写 Operation**
-后续再做：
-
-```text
-pr.publish
-workflow.dispatch_and_track
-workflow.rerun_run
-workflow.rerun_job
-cache.plan_delete
-cache.delete
-```
-
-要求：
-- 写操作必须 `writes_remote=true`。
-- operation 名字必须显式。
-- 不允许藏在读组合里。
-- skill 里必须要求 GPT-5.5 在执行前确认意图或说明副作用。
-- Codex MCP 配置层面可把写 operation 所在 tool 设为 `prompt/approve`，但由于目前是单 execute 入口，需要在 operation metadata 和 skill 层明确风险。
-
-**Skill 结构**
-不要把所有内容放进一个 `SKILL.md`。建议：
-
-```text
-localgpt-platform/
+templates/skills/localgpt-platform/
   SKILL.md
   references/
     ci-failure.md
     artifact-analysis.md
     pr-workflow.md
-    workflow-rerun.md
-    runner-diagnose.md
-    cache-ops.md
-    write-ops.md
-  examples/
-    ci-prepare-failure-context.json
-    artifact-sync-for-run.json
-    pr-preflight.json
-    pr-publish.json
 ```
 
-`SKILL.md` 只放：
-- 何时使用 MCP
-- 何时不用 MCP
-- 最常用 CI 修复流程
-- 固定路径规范
-- 大日志处理原则
-- 指向 references
+`SKILL.md` 只保留常用入口和边界。复杂流程放 references。
 
-`references/ci-failure.md`
-- 写完整 CI runbook：
-  - `ci.find_runs`
-  - `ci.prepare_failure_context`
-  - 本地 grep/tail 日志
-  - 修复代码
-  - 本地验证
-  - 再查 CI
+## 不需要做进 MCP 的能力
 
-`references/write-ops.md`
-- 专门写副作用 operation 规则。
-- 所有 `writes_remote=true` 的操作都集中说明。
-
-**大日志处理框架**
-第一阶段不需要做 `log.search` MCP operation，让 GPT-5.5 用 shell 读本地文件片段即可。
-
-skill 中明确：
-- 先 `download_job_log`
-- 再用 shell 搜索：
-  - error
-  - failed
-  - panic
-  - traceback
-  - exception
-- 只读取上下文片段或 tail
-- 不要整份日志塞进上下文
-
-后续如果需要统一体验，再加：
+这些交给 Codex 本地能力，不要重复实现：
 
 ```text
-log.extract_error_blocks
+workspace prepare
+workspace exec
+workspace diff
+workspace patch
+workspace write file
+workspace reset
+create local branch
+git status / diff / log / show / commit / push
+运行测试 / 构建 / lint
+搜索日志文件
+读取 artifact 内文件
+解析本地测试报告
 ```
 
-但它仍然只读本地文件，不再调用 Gitea。
+这些不是 Gitea 平台 API 的价值点。把它们塞进 MCP 会制造重复抽象，也会限制 Codex 本地能力。
 
-**审查重点**
-我后续审查时会卡这些点：
+## 必要技术边界
 
-1. `actions.get_job_log` 必须不存在，只能有 `actions.download_job_log`。
-2. job log 不允许返回原始正文。
-3. artifact 不允许传 `target_dir`。
-4. 所有本地写入必须在 `cwd` 内。
-5. 组合 operation 必须返回 `evidence[]`，不能只返回总结。
-6. 读组合不能顺手执行写远端操作。
-7. 写 operation 必须有 `writes_remote=true`。
-8. `describe_operations` 不能一次性返回过大的完整 schema；要支持 `brief/full` 或按 operation inspect。
-9. skill 必须是渐进披露，不要把所有 runbook 堆进 `SKILL.md`。
-10. 返回结构必须稳定，错误必须结构化。
+保留这些边界，因为它们是工具安全和上下文成本问题，不是限制 GPT-5.5 的推理能力：
 
-**推荐实施顺序**
-1. 先整理 operation registry metadata。
-2. 改造 `describe_operations` 支持 `category/detail/operation`。
-3. 实现 `ci.prepare_failure_context`。
-4. 实现 `artifact.sync_for_run`。
-5. 实现 `pr.preflight`。
-6. 拆 skill references。
-7. 再考虑写操作：`pr.publish`、`workflow.rerun`。
+- 不返回 token、secret、私钥、registration token。
+- job log 不直接返回正文。
+- artifact 内容不直接返回正文。
+- 本地写入只写到传入的 `cwd` 下面。
+- 不接受 `target_dir` 这类任意输出目录。
+- zip 解压要防路径穿越。
+- 组合读 operation 不顺手执行远端写操作。
 
-最终目标就是：MCP 负责收集证据和落盘大文件，skill 负责流程，GPT-5.5 负责判断和修复。
+## 待实现功能
+
+下面留给后续实现。
+
+### 1. `ci.find_runs`
+
+目标：
+
+- 只查 run，不下载日志。
+- 根据 branch、head_sha、status、workflow、event 查询候选 runs。
+- 返回紧凑列表。
+
+用途：
+
+- 当 Codex 还不确定应该分析哪个 run 时，先用它找候选。
+
+### 2. `ci.get_run_summary`
+
+目标：
+
+- 查询单个 run。
+- 查询 jobs。
+- 返回 run + job 紧凑摘要。
+- 不下载日志。
+
+用途：
+
+- 比 `ci.prepare_failure_context` 更轻。
+- 适合只想看 CI 当前状态的场景。
+
+### 3. `workflow.rerun_run`
+
+目标：
+
+- 显式重跑整个 workflow run。
+- 远端写操作，metadata 必须标记 `writes_remote=true`。
+
+说明：
+
+- 只在 Gitea 官方 API 确认支持后实现。
+- 不要藏进 `ci.prepare_failure_context`。
+
+### 4. `workflow.rerun_job`
+
+目标：
+
+- 显式重跑单个 job。
+- 远端写操作，metadata 必须标记 `writes_remote=true`。
+
+用途：
+
+- 平台偶发、网络偶发、runner 偶发失败时使用。
+
+### 5. `workflow.dispatch_and_track`
+
+目标：
+
+- 触发 workflow dispatch。
+- 再根据 workflow_id、ref、created_after 查询候选 runs。
+- 返回 candidate runs，不硬说一定匹配。
+
+说明：
+
+- 远端写操作。
+- `dispatch` 不应假设直接拿到 run_id。
+
+### 6. `pr.publish`
+
+目标：
+
+- 创建或更新 PR。
+- 输入 head、base、title、body、mode。
+- 返回 PR number、URL、created_or_updated、evidence。
+
+说明：
+
+- 只处理 Gitea 平台 PR API。
+- 本地 commit 和 push 仍由 Codex 用 git 完成。
+- 后续可支持 `expected_head_sha`。
+
+### 7. `pr.comment`
+
+目标：
+
+- 给 PR 追加评论。
+- 显式远端写操作。
+
+说明：
+
+- 不要让 CI 诊断组合 operation 自动评论。
+
+### 8. `pr.merge`
+
+目标：
+
+- 合并 PR。
+- 显式远端写操作。
+
+说明：
+
+- 只在用户明确要求合并时由 Codex 调用。
+- 建议参数包含 `expected_head_sha`。
+
+### 9. `runner.diagnose_queue`
+
+目标：
+
+- 查询 queued/in_progress runs。
+- 查询 repo runners。
+- 返回 runner 在线、禁用、busy、label mismatch 的事实摘要。
+
+用途：
+
+- 判断 CI 卡住是否与 runner 有关。
+
+### 10. `artifact.index_local`
+
+目标：
+
+- 对已下载 artifact 生成本地文件树索引。
+- 返回 path、bytes、kind。
+- 不返回文件内容。
+
+说明：
+
+- 这个不是必须。Codex 可以用 shell 做。
+- 如果实现，只作为便利 operation。
+
+### 11. cache 相关能力
+
+候选：
+
+```text
+cache.list
+cache.plan_delete
+cache.delete
+```
+
+说明：
+
+- 只有 Gitea 官方 API 明确支持 Actions cache 管理时才实现。
+- 不使用内部 API。
+- `cache.delete` 必须是显式远端写/删操作。
+
+## 后续实现优先级
+
+建议顺序：
+
+```text
+1. ci.find_runs
+2. ci.get_run_summary
+3. workflow.rerun_run
+4. workflow.rerun_job
+5. pr.publish
+6. pr.comment
+7. runner.diagnose_queue
+8. workflow.dispatch_and_track
+9. pr.merge
+10. artifact.index_local
+11. cache.*
+```
+
+优先补远端平台状态和平台动作，不补 Codex 本地已经有的代码编辑、shell、git、测试能力。
