@@ -26,7 +26,6 @@ When no explicit `job_id` is provided, artifacts are written under a run pseudo-
 
 ```text
 {cwd}/jobs/run-<run_id>/artifact/
-{cwd}/jobs/run-<run_id>/artifact/<artifact_name>.zip
 {cwd}/jobs/run-<run_id>/artifact/<artifact_name>/...
 {cwd}/jobs/run-<run_id>/artifact/manifest.json
 ```
@@ -35,15 +34,17 @@ For a single artifact, `actions.download_artifact` writes to:
 
 ```text
 {cwd}/jobs/<job_id>/artifact/
-{cwd}/jobs/<job_id>/artifact/<artifact_name>.zip
 {cwd}/jobs/<job_id>/artifact/manifest.json
 ```
+
+The zip returned by the Gitea artifact API is a transport file. With the default `extract=true`, the MCP deletes the zip after successful extraction and records the download evidence in `manifest.json`. If `extract=false`, the zip is retained and returned as `data.zip_path`.
 
 ## Rules
 
 - `cwd` must be an existing directory.
 - `target_dir` is forbidden.
 - Zip extraction rejects zip-slip paths.
+- Successful default extraction does not leave zip files as user-facing artifacts.
 - Artifact content is never returned in the MCP response.
 - Read local files selectively after sync.
 

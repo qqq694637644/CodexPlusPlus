@@ -18,6 +18,7 @@ from localgpt_platform.operations import (
     artifact_sync_for_run,
     ci_prepare_failure_context,
     describe_operations,
+    download_artifact,
     execute_operation,
     pr_preflight,
 )
@@ -196,7 +197,17 @@ async def main() -> None:
         sync = await artifact_sync_for_run(client, "owner/repo", {"cwd": tmp, "run_id": 10, "artifact_name_pattern": "test-*"})
         assert sync["ok"] is True
         assert sync["data"]["file_count"] == 1
+        assert sync["data"]["retained_zip_paths"] == [], sync
         assert Path(sync["data"]["manifest_path"]).is_file()
+        manifest = Path(sync["data"]["manifest_path"]).read_text(encoding="utf-8")
+        assert '"evidence"' in manifest, manifest
+        assert not list(Path(sync["data"]["artifact_dir"]).glob("*.zip")), sync
+
+        single = await download_artifact(client, "owner/repo", {"cwd": tmp, "job_id": 77, "artifact_id": 123, "artifact_name": "single-result"})
+        assert single["ok"] is True
+        assert single["data"]["zip_path"] is None, single
+        assert single["data"]["transport_zip_removed"] is True, single
+        assert not Path(single["data"]["transport_zip_path"]).exists(), single
 
         await expect_shape_error(ci_prepare_failure_context(FakeGiteaClient(broken="jobs"), "owner/repo", {"cwd": tmp, "run_id": 10}))
         await expect_shape_error(artifact_sync_for_run(FakeGiteaClient(broken="artifacts"), "owner/repo", {"cwd": tmp, "run_id": 10}))
