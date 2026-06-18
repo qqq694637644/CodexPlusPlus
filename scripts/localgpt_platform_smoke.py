@@ -154,6 +154,16 @@ async def main() -> None:
     forbidden = await execute_operation("actions.download_artifact", repo="owner/repo", params={"target_dir": "x"})
     assert forbidden["ok"] is False
     assert forbidden["error"]["code"] == "forbidden_param", forbidden
+    typo = await execute_operation("actions.list_runs", repo="owner/repo", params={"limt": 5})
+    assert typo["ok"] is False
+    assert typo["error"]["code"] == "unknown_param", typo
+    assert typo["error"]["details"]["unknown_params"] == ["limt"], typo
+    assert "limit" in typo["error"]["details"]["allowed_params"], typo
+    combo_typo = await execute_operation("ci.prepare_failure_context", repo="owner/repo", params={"cwd": ".", "runid": 10})
+    assert combo_typo["ok"] is False
+    assert combo_typo["error"]["code"] == "unknown_param", combo_typo
+    assert combo_typo["error"]["details"]["unknown_params"] == ["runid"], combo_typo
+    assert "run_id" in combo_typo["error"]["details"]["allowed_params"], combo_typo
     missing = await execute_operation("ci.prepare_failure_context", repo="owner/repo", params={})
     assert missing["ok"] is False
     assert missing["error"]["code"] == "missing_param", missing

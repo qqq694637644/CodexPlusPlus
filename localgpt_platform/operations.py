@@ -745,6 +745,18 @@ def validate_request(operation: str, repo: str | None, params: dict[str, Any]) -
     spec = OPERATION_SPECS[operation]
     if spec["repo_required"] and not repo:
         return PlatformError("missing_repo", "该 operation 需要 repo 参数", {"repo_format": "owner/repo"})
+
+    allowed_params = set(spec["required_params"]) | set(spec["optional_params"])
+    unknown_params = sorted(set(params) - allowed_params)
+    if spec["writes_local_files"] and "target_dir" in unknown_params:
+        return PlatformError("forbidden_param", "本地落盘 operation 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/。", {"param": "target_dir"})
+    if unknown_params:
+        return PlatformError(
+            "unknown_param",
+            "operation 收到了未声明的 params 字段",
+            {"operation": operation, "unknown_params": unknown_params, "allowed_params": sorted(allowed_params)},
+        )
+
     if spec["writes_local_files"] and "target_dir" in params:
         return PlatformError("forbidden_param", "本地落盘 operation 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/。", {"param": "target_dir"})
     for name in spec["required_params"]:
