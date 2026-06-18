@@ -257,9 +257,9 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_remote=False,
         requires_cwd=True,
         required_params={"cwd": "string，当前 Codex workspace 目录，作为所有 job 文件落盘根目录", "job_id": "integer/string，job id，用于目录 cwd/jobs/<job_id>/artifact/", "artifact_id": "integer/string，artifact id"},
-        optional_params={"artifact_name": "string，用于解压子目录名；缺省为 artifact-<artifact_id>"},
-        returns={"data": "artifact_id、artifact_dir、manifest_path、extracted_files、content_returned=false。", "evidence": "含临时 zip 下载路径、删除状态和 bytes 的 artifact 下载证据。"},
-        example={"operation": "actions.download_artifact", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456, "artifact_id": 789, "artifact_name": "test-results"}},
+        optional_params={"artifact_name": "string，用于 zip 文件名；缺省为 artifact-<artifact_id>", "extract": "boolean，是否解压；默认 true"},
+        returns={"data": "artifact_id、zip_path、artifact_dir、manifest_path、extracted_files、content_returned=false。", "evidence": "含 download_path 和 bytes 的 artifact 下载证据。"},
+        example={"operation": "actions.download_artifact", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456, "artifact_id": 789, "artifact_name": "test-results", "extract": True}},
         risk_level="medium",
     ),
     "actions.list_runners": operation_spec(
@@ -309,8 +309,8 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_remote=False,
         requires_cwd=True,
         required_params={"cwd": "string，当前 Codex workspace 目录", "run_id": "integer/string，workflow run id"},
-        optional_params={"artifact_name_pattern": "string，fnmatch 风格 artifact 名称过滤", "job_id": "integer/string，可显式指定落盘 job 目录；缺省 run-<run_id>", "page": "integer，页码", "limit": "integer，每页数量"},
-        returns={"data": "manifest_path、artifact_dir、artifact_dirs、file_count、content_returned=false。", "evidence": "list artifacts 和每个 artifact 下载证据。"},
+        optional_params={"artifact_name_pattern": "string，fnmatch 风格 artifact 名称过滤", "job_id": "integer/string，可显式指定落盘 job 目录；缺省 run-<run_id>", "extract": "boolean，是否解压；默认 true", "page": "integer，页码", "limit": "integer，每页数量"},
+        returns={"data": "manifest_path、artifact_dir、zip_paths、artifact_dirs、file_count、content_returned=false。", "evidence": "list artifacts 和每个 artifact 下载证据。"},
         example={"operation": "artifact.sync_for_run", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "run_id": 123, "artifact_name_pattern": "test-*"}},
         risk_level="medium",
     ),
@@ -548,19 +548,9 @@ async def download_artifact(client: GiteaClient, repo: str | None, params: dict[
     job_id = required_param(params, "job_id")
     artifact_id = required_param(params, "artifact_id")
     artifact_name = safe_name(str(params.get("artifact_name") or f"artifact-{artifact_id}"))
-    data, evidence = await download_artifact_to_path(client, repo, cwd, job_id, artifact_id, artifact_name, step="actions.download_artifact")
-    manifest_path = write_manifest(
-        Path(data["artifact_dir"]),
-        cwd,
-        {
-            "operation": "actions.download_artifact",
-            "repo": repo,
-            "generated_at": utc_now(),
-            "job_id": job_id,
-            "artifacts": [data],
-            "evidence": [evidence],
-        },
-    )
+    extract = bool_param(params, "extract", True)
+    data, evidence = await download_artifact_to_path(client, repo, cwd, job_id, artifact_id, artifact_name, extract=extract, step="actions.download_artifact")
+    manifest_path = write_manifest(Path(data["artifact_dir"]), cwd, {"operation": "actions.download_artifact", "repo": repo, "generated_at": utc_now(), "job_id": job_id, "artifacts": [data]})
     data["manifest_path"] = str(manifest_path)
     return ok_result(operation="actions.download_artifact", data=data, evidence=evidence, meta={"repo": repo})
 
@@ -658,6 +648,7 @@ async def artifact_sync_for_run(client: GiteaClient, repo: str | None, params: d
     run_id = required_param(params, "run_id")
     job_id = str(params.get("job_id") or f"run-{run_id}")
     pattern = str(params.get("artifact_name_pattern") or "").strip()
+    extract = bool_param(params, "extract", True)
     evidence: list[dict[str, Any]] = []
     warnings: list[Any] = []
 
@@ -678,14 +669,14 @@ async def artifact_sync_for_run(client: GiteaClient, repo: str | None, params: d
     for artifact in selected:
         artifact_id = str(require_response_field(artifact, "id", step="artifact.list_artifacts", path=artifacts_path))
         artifact_name = safe_name(str(require_response_field(artifact, "name", step="artifact.list_artifacts", path=artifacts_path)))
-        data, download_evidence = await download_artifact_to_path(client, repo, cwd, job_id, artifact_id, artifact_name, step="artifact.download_artifact", extract_dir_name=artifact_name)
+        data, download_evidence = await download_artifact_to_path(client, repo, cwd, job_id, artifact_id, artifact_name, extract=extract, step="artifact.download_artifact", extract_dir_name=artifact_name)
         data["source"] = compact_artifact(artifact)
         evidence.append(download_evidence)
         downloaded.append(data)
 
     artifact_root = job_output_dir(cwd, job_id) / "artifact"
     assert_relative_to_root(artifact_root, cwd)
-    manifest = {"operation": "artifact.sync_for_run", "repo": repo, "run_id": run_id, "job_id": job_id, "artifact_name_pattern": pattern or None, "generated_at": utc_now(), "artifacts": downloaded, "evidence": evidence}
+    manifest = {"operation": "artifact.sync_for_run", "repo": repo, "run_id": run_id, "job_id": job_id, "artifact_name_pattern": pattern or None, "generated_at": utc_now(), "artifacts": downloaded}
     manifest_path = write_manifest(artifact_root, cwd, manifest)
     file_count = sum(int(item.get("extracted_file_count", 0)) for item in downloaded)
 
@@ -694,7 +685,7 @@ async def artifact_sync_for_run(client: GiteaClient, repo: str | None, params: d
 
     return ok_result(
         operation="artifact.sync_for_run",
-        data={"run_id": run_id, "job_id": job_id, "manifest_path": str(manifest_path), "artifact_dir": str(artifact_root), "artifact_dirs": [item["extract_dir"] for item in downloaded if item.get("extract_dir")], "file_count": file_count, "artifacts": downloaded, "content_returned": False},
+        data={"run_id": run_id, "job_id": job_id, "manifest_path": str(manifest_path), "artifact_dir": str(artifact_root), "zip_paths": [item["zip_path"] for item in downloaded], "artifact_dirs": [item["extract_dir"] for item in downloaded if item.get("extract_dir")], "file_count": file_count, "artifacts": downloaded, "content_returned": False},
         evidence=evidence,
         meta={"repo": repo, "cwd": str(cwd), "run_id": run_id},
         warnings=warnings,
@@ -877,26 +868,19 @@ async def download_job_log_to_path(client: GiteaClient, repo: str, cwd: Path, jo
     return {"job_id": job_id, "cwd": str(cwd), "job_dir": str(job_dir), "log_path": str(log_path), "bytes": log_path.stat().st_size, "content_returned": False}, evidence
 
 
-async def download_artifact_to_path(client: GiteaClient, repo: str, cwd: Path, job_id: str, artifact_id: str, artifact_name: str, *, step: str, extract_dir_name: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+async def download_artifact_to_path(client: GiteaClient, repo: str, cwd: Path, job_id: str, artifact_id: str, artifact_name: str, *, extract: bool, step: str, extract_dir_name: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     job_dir = job_output_dir(cwd, job_id)
     artifact_dir = job_dir / "artifact"
-    zip_path = artifact_dir / f".{safe_name(artifact_name)}.download.zip"
+    zip_path = artifact_dir / f"{safe_name(artifact_name)}.zip"
     assert_relative_to_root(artifact_dir, cwd)
     assert_relative_to_root(zip_path, cwd)
     evidence = await client.download(repo_path(repo, f"/actions/artifacts/{path_segment(artifact_id)}/zip"), zip_path, step=step)
 
     extract_dir = artifact_dir / safe_name(extract_dir_name) if extract_dir_name else artifact_dir
     assert_relative_to_root(extract_dir, cwd)
-    extracted_files = extract_zip(zip_path, extract_dir)
-    try:
-        zip_path.unlink()
-    except OSError as exc:
-        raise PlatformError(
-            "artifact_zip_cleanup_failed",
-            "artifact 已解压但临时 zip 删除失败",
-            {"artifact_dir": str(artifact_dir)},
-        ) from exc
-    evidence["temporary_zip_deleted"] = True
+    extracted_files: list[str] = []
+    if extract:
+        extracted_files = extract_zip(zip_path, extract_dir)
 
     return {
         "artifact_id": artifact_id,
@@ -904,9 +888,10 @@ async def download_artifact_to_path(client: GiteaClient, repo: str, cwd: Path, j
         "artifact_name": safe_name(artifact_name),
         "cwd": str(cwd),
         "job_dir": str(job_dir),
+        "zip_path": str(zip_path),
         "artifact_dir": str(artifact_dir),
-        "extract_dir": str(extract_dir),
-        "extracted": True,
+        "extract_dir": str(extract_dir) if extract else None,
+        "extracted": extract,
         "extracted_file_count": len(extracted_files),
         "extracted_files": extracted_files[:200],
         "extracted_files_truncated": len(extracted_files) > 200,
