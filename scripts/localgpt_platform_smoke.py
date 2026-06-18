@@ -54,7 +54,8 @@ class FakeGiteaClient:
         if path.endswith("/actions/workflows/ci.yml/runs"):
             return {"workflow_runs": [{"id": 11, "status": "queued", "head_branch": "main", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}, evidence
         if path.endswith("/actions/workflows/ci.yml/dispatches"):
-            assert (json_body or {}).get("return_run_details") is True, json_body
+            assert (params or {}).get("return_run_details") is True, params
+            assert "return_run_details" not in (json_body or {}), json_body
             if self.broken == "dispatch_no_run_id":
                 return None, evidence
             return {"run_id": 11}, evidence

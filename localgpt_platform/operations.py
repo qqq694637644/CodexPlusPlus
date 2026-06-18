@@ -1066,10 +1066,16 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
         raise PlatformError("invalid_param", "params.inputs 必须是 object", {"param": "inputs", "actual_type": type(inputs).__name__})
     evidence: list[dict[str, Any]] = []
     dispatch_path = repo_path(repo, f"/actions/workflows/{path_segment(workflow_id)}/dispatches")
-    body: dict[str, Any] = {"ref": ref, "return_run_details": True}
+    body: dict[str, Any] = {"ref": ref}
     if inputs:
         body["inputs"] = inputs
-    dispatch_data, dispatch_evidence = await client.request_json("POST", dispatch_path, json_body=body, step="workflow.dispatch_and_track.dispatch")
+    dispatch_data, dispatch_evidence = await client.request_json(
+        "POST",
+        dispatch_path,
+        params={"return_run_details": True},
+        json_body=body,
+        step="workflow.dispatch_and_track.dispatch",
+    )
     dispatch_response = expect_object_or_none(dispatch_data, step="workflow.dispatch_and_track.dispatch", path=dispatch_path)
     evidence.append(dispatch_evidence)
 

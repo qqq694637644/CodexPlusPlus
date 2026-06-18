@@ -28,4 +28,4 @@ Reads the run first, verifies required `expected_head_sha` and optional status/c
 
 ## `workflow.dispatch_and_track`
 
-Dispatches a workflow with `return_run_details=true`, then queries candidate runs by workflow/ref/actor/created_after. It returns candidate runs and does not claim a definite match unless the dispatch response contains a run id.
+Dispatches a workflow with query parameter `return_run_details=true`, then queries candidate runs by workflow/ref/actor/created_after. It returns candidate runs and does not claim a definite match unless the dispatch response contains a run id.
