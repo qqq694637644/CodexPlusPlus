@@ -110,17 +110,22 @@ actions.download_artifact
 用途：
 
 - 下载单个 artifact。
-- 解压到当前 workspace 的 job 目录。
+- 直接解压到当前 workspace 的 job 目录。
 - 写 manifest。
-- MCP 返回路径、文件数量和 evidence，不返回 artifact 内容。
+- MCP 返回解压目录、文件数量和 evidence，不返回 artifact 内容。
 
 落盘路径：
 
 ```text
 {cwd}/jobs/<job_id>/artifact/
-{cwd}/jobs/<job_id>/artifact/<artifact_name>.zip
 {cwd}/jobs/<job_id>/artifact/manifest.json
 ```
+
+实现要求：
+
+- zip 只是 Gitea artifact API 的传输格式。
+- 成功解压后不保留 zip 包作为对外产物。
+- manifest 记录 artifact id、名称、解压目录、文件数量和 evidence。
 
 Codex 后续用 shell 查看文件树、搜索、读取相关报告即可。
 
@@ -159,7 +164,7 @@ artifact.sync_for_run
 
 - 列出某个 run 的 artifacts。
 - 按名称模式筛选。
-- 下载并解压选中 artifacts。
+- 下载并直接解压选中 artifacts。
 - 写本地 manifest。
 
 默认落盘路径：
@@ -264,50 +269,78 @@ git status / diff / log / show / commit / push
 - artifact 内容不直接返回正文。
 - 本地写入只写到传入的 `cwd` 下面。
 - 不接受 `target_dir` 这类任意输出目录。
-- zip 解压要防路径穿越。
+- artifact zip 只作为传输格式；成功解压后不保留 zip 包。
+- artifact 解压要防路径穿越。
 - 组合读 operation 不顺手执行远端写操作。
+
+## 远端写 operation 安全协议
+
+后续凡是会修改 Gitea 远端状态的 operation，必须满足：
+
+- `writes_remote=true`。
+- `risk_level=high`。
+- 名称包含明确副作用动词，例如 `publish`、`dispatch`、`rerun`、`delete`、`merge`、`comment`。
+- 参数包含 `confirm=true` 或明确的非 dry-run 标志。
+- 参数包含必要的 `expected_*`，避免 Codex 使用陈旧上下文修改新状态。
+- `evidence` 不记录 secret、完整大 body、token、registration token。
+- 失败不自动重试。
+- 组合读 operation 禁止调用远端写 operation。
+
+这些约束是远端副作用的接口协议，不是对 GPT-5.5 本地推理和本地操作的限制。
 
 ## 待实现功能
 
 下面留给后续实现。
 
-### 1. `ci.find_runs`
-
-目标：
-
-- 只查 run，不下载日志。
-- 根据 branch、head_sha、status、workflow、event 查询候选 runs。
-- 返回紧凑列表。
-
-用途：
-
-- 当 Codex 还不确定应该分析哪个 run 时，先用它找候选。
-
-### 2. `ci.get_run_summary`
+### 1. `ci.get_run_summary`
 
 目标：
 
 - 查询单个 run。
 - 查询 jobs。
-- 返回 run + job 紧凑摘要。
+- 返回 run + jobs 的紧凑摘要。
 - 不下载日志。
 
 用途：
 
-- 比 `ci.prepare_failure_context` 更轻。
-- 适合只想看 CI 当前状态的场景。
+- 看 CI 是否还在跑。
+- 确认失败的是哪个 job。
+- 合并前做远端 CI 状态检查。
 
-### 3. `workflow.rerun_run`
+返回建议：
+
+- run compact summary。
+- jobs compact summary。
+- failed/cancelled/timed_out job count。
+- queued/in_progress job count。
+- 失败时给出 `next_suggested_operations=["ci.prepare_failure_context"]`。
+
+### 2. `runner.diagnose_queue`
 
 目标：
 
-- 显式重跑整个 workflow run。
-- 远端写操作，metadata 必须标记 `writes_remote=true`。
+- 查询 queued/in_progress runs。
+- 查询 repo runners。
+- 返回 runner 在线、禁用、busy、label mismatch 的事实摘要。
+
+用途：
+
+- 判断 CI 卡住是否与 runner 有关。
+- 在 rerun 前先判断是否是 runner/queue 问题。
+
+### 3. `ci.find_run_candidates`
+
+目标：
+
+- 只查 run，不下载日志。
+- 根据 branch、head_sha、status、workflow、event 查询候选 runs。
+- 返回紧凑且排序后的候选列表。
+- 返回 `next_suggested_operations`。
 
 说明：
 
-- 只在 Gitea 官方 API 确认支持后实现。
-- 不要藏进 `ci.prepare_failure_context`。
+- 不做普通 `actions.list_runs` wrapper。
+- 如果没有候选选择和紧凑摘要价值，就不要实现，直接使用 `actions.list_runs`。
 
 ### 4. `workflow.rerun_job`
 
@@ -320,7 +353,19 @@ git status / diff / log / show / commit / push
 
 - 平台偶发、网络偶发、runner 偶发失败时使用。
 
-### 5. `workflow.dispatch_and_track`
+### 5. `workflow.rerun_run`
+
+目标：
+
+- 显式重跑整个 workflow run。
+- 远端写操作，metadata 必须标记 `writes_remote=true`。
+
+说明：
+
+- 只在 Gitea 官方 API 确认支持后实现。
+- 不要藏进 `ci.prepare_failure_context`。
+
+### 6. `workflow.dispatch_and_track`
 
 目标：
 
@@ -328,78 +373,89 @@ git status / diff / log / show / commit / push
 - 再根据 workflow_id、ref、created_after 查询候选 runs。
 - 返回 candidate runs，不硬说一定匹配。
 
+参数建议：
+
+- `workflow_id`
+- `ref`
+- `inputs`
+- `created_after`
+- `candidate_match_strategy`
+
 说明：
 
 - 远端写操作。
 - `dispatch` 不应假设直接拿到 run_id。
+- `evidence` 只记录 `inputs_summary`，不记录 secret 或完整敏感输入。
 
-### 6. `pr.publish`
+### 7. `pr.publish`
 
 目标：
 
 - 创建或更新 PR。
-- 输入 head、base、title、body、mode。
 - 返回 PR number、URL、created_or_updated、evidence。
+
+参数建议：
+
+- `mode=create|update|upsert`
+- `head`
+- `base`
+- `title`
+- `body`
+- `expected_head_sha`
+- `existing_pr_number` 或 `match_by=head/base`
 
 说明：
 
 - 只处理 Gitea 平台 PR API。
 - 本地 commit 和 push 仍由 Codex 用 git 完成。
-- 后续可支持 `expected_head_sha`。
+- 开发阶段建议先实现 `create`，再实现 `update`；`upsert` 最后做，避免误更新错 PR。
 
-### 7. `pr.comment`
+### 8. `pr.comment`
 
 目标：
 
 - 给 PR 追加评论。
 - 显式远端写操作。
 
+参数建议：
+
+- `pr_number`
+- `body`
+- `body_format=markdown`
+
 说明：
 
 - 不要让 CI 诊断组合 operation 自动评论。
+- 限制 body 大小。
+- `evidence` 不记录完整超长 body，只记录长度、hash 或短 preview。
 
-### 8. `pr.merge`
+### 9. `pr.merge`
 
 目标：
 
 - 合并 PR。
 - 显式远端写操作。
 
+强制参数建议：
+
+- `pr_number`
+- `expected_head_sha`
+- `base_branch`
+- `merge_method`
+- `confirm=true`
+- `require_ci_success=true`
+
 说明：
 
 - 只在用户明确要求合并时由 Codex 调用。
-- 建议参数包含 `expected_head_sha`。
+- 内部先做最小 preflight：PR open、非 draft、未 merged、head sha 匹配、base branch 匹配。
 
-### 9. `runner.diagnose_queue`
-
-目标：
-
-- 查询 queued/in_progress runs。
-- 查询 repo runners。
-- 返回 runner 在线、禁用、busy、label mismatch 的事实摘要。
-
-用途：
-
-- 判断 CI 卡住是否与 runner 有关。
-
-### 10. `artifact.index_local`
-
-目标：
-
-- 对已下载 artifact 生成本地文件树索引。
-- 返回 path、bytes、kind。
-- 不返回文件内容。
-
-说明：
-
-- 这个不是必须。Codex 可以用 shell 做。
-- 如果实现，只作为便利 operation。
-
-### 11. cache 相关能力
+### 10. cache 相关能力
 
 候选：
 
 ```text
+cache.diagnose
 cache.list
 cache.plan_delete
 cache.delete
@@ -409,24 +465,37 @@ cache.delete
 
 - 只有 Gitea 官方 API 明确支持 Actions cache 管理时才实现。
 - 不使用内部 API。
+- 优先实现 `cache.diagnose`，用于分析日志和 runner cache 配置相关失败模式。
 - `cache.delete` 必须是显式远端写/删操作。
+
+### 不实现为 MCP：`artifact.index_local`
+
+`artifact.index_local` 不进 Gitea MCP。
+
+原因：
+
+- 它不是 Gitea 远端平台能力。
+- Codex 已经能用 shell 查看 artifact 文件树。
+- 放进 MCP 会模糊“远端平台事实”和“本地文件分析”的边界。
+
+如后续确实需要便利能力，可以放到 skill 的本地脚本里，而不是作为 MCP operation。
 
 ## 后续实现优先级
 
 建议顺序：
 
 ```text
-1. ci.find_runs
-2. ci.get_run_summary
-3. workflow.rerun_run
+1. ci.get_run_summary
+2. runner.diagnose_queue
+3. ci.find_run_candidates
 4. workflow.rerun_job
-5. pr.publish
-6. pr.comment
-7. runner.diagnose_queue
-8. workflow.dispatch_and_track
+5. workflow.rerun_run
+6. workflow.dispatch_and_track
+7. pr.publish
+8. pr.comment
 9. pr.merge
-10. artifact.index_local
-11. cache.*
+10. cache.diagnose / cache.list
+11. cache.plan_delete / cache.delete
 ```
 
 优先补远端平台状态和平台动作，不补 Codex 本地已经有的代码编辑、shell、git、测试能力。
