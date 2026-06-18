@@ -25,7 +25,7 @@ from .cache import cache_diagnose
 from .ci import ci_find_run_candidates, ci_get_run_summary, ci_prepare_failure_context
 from .pr import pr_comment, pr_merge, pr_preflight, pr_publish
 from .runner import runner_diagnose_queue
-from .schemas import bool_param, compact_user, expect_object
+from .schemas import bool_param, compact_user, expect_object, string_map_param
 from .workflow import workflow_dispatch_and_track, workflow_rerun_job, workflow_rerun_run
 
 OperationHandler = Callable[[GiteaClient, str | None, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -428,7 +428,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_remote=True,
         requires_cwd=False,
         required_params={"workflow_id": "string/integer，workflow id 或文件名", "ref": "string，dispatch ref", "confirm": "boolean，必须是 JSON true"},
-        optional_params={"inputs": "object，workflow_dispatch inputs", "created_after": "string，ISO 时间，本地过滤候选 runs", "actor": "string，触发用户过滤", "candidate_limit": "integer，候选 run 数量；默认 10"},
+        optional_params={"inputs": "object[string,string]，workflow_dispatch inputs", "created_after": "string，ISO 时间，本地过滤候选 runs", "actor": "string，触发用户过滤", "candidate_limit": "integer，候选 run 数量；默认 10"},
         returns={"data": "dispatch_run_details、workflow_run_id、candidate_runs、candidate_count、matched、match_status、content_returned=false。", "evidence": "dispatch 和候选 runs 查询证据。"},
         example={"operation": "workflow.dispatch_and_track", "repo": "owner/repo", "params": {"workflow_id": "ci.yml", "ref": "main", "confirm": True}},
         risk_level="high",
@@ -622,6 +622,11 @@ def validate_request(operation: str, repo: str | None, params: dict[str, Any]) -
     if spec["writes_remote"] and "confirm" in spec["required_params"]:
         if params.get("confirm") is not True:
             return PlatformError("confirmation_required", "远端写 operation 需要 params.confirm=true", {"param": "confirm"})
+    if operation == "workflow.dispatch_and_track":
+        try:
+            string_map_param(params, "inputs")
+        except PlatformError as exc:
+            return exc
     return None
 
 def validate_operation_specs() -> None:

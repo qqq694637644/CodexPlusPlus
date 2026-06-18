@@ -54,6 +54,34 @@ def int_param(params: dict[str, Any], name: str, default: int, *, minimum: int |
         raise PlatformError("invalid_param", f"params.{name} 必须大于等于 {minimum}", {"param": name, "value": value, "minimum": minimum})
     return number
 
+def string_map_param(params: dict[str, Any], name: str) -> dict[str, str] | None:
+    value = params.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise PlatformError(
+            "invalid_param",
+            f"params.{name} 必须是 object[string,string]",
+            {"param": name, "actual_type": type(value).__name__},
+        )
+    result: dict[str, str] = {}
+    invalid: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key.strip():
+            invalid[str(key)] = f"invalid_key:{type(key).__name__}"
+            continue
+        if not isinstance(item, str):
+            invalid[key] = type(item).__name__
+            continue
+        result[key] = item
+    if invalid:
+        raise PlatformError(
+            "invalid_param",
+            f"params.{name} 必须是 object[string,string]",
+            {"param": name, "invalid_entries": invalid},
+        )
+    return result
+
 def safe_name(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in value.strip())
     return cleaned.strip(".-") or "unnamed"

@@ -310,6 +310,14 @@ async def main() -> None:
     write_confirm_string = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"run_id": 10, "job_id": 99, "confirm": "true"})
     assert write_confirm_string["ok"] is False
     assert write_confirm_string["error"]["code"] == "confirmation_required", write_confirm_string
+    bad_dispatch_inputs = await execute_operation(
+        "workflow.dispatch_and_track",
+        repo="owner/repo",
+        params={"workflow_id": "ci.yml", "ref": "main", "inputs": {"debug": True, "retries": 3}, "confirm": True},
+    )
+    assert bad_dispatch_inputs["ok"] is False
+    assert bad_dispatch_inputs["error"]["code"] == "invalid_param", bad_dispatch_inputs
+    assert bad_dispatch_inputs["error"]["details"]["invalid_entries"] == {"debug": "bool", "retries": "int"}, bad_dispatch_inputs
     missing = await execute_operation("ci.prepare_failure_context", repo="owner/repo", params={})
     assert missing["ok"] is False
     assert missing["error"]["code"] == "missing_param", missing
@@ -366,6 +374,19 @@ async def main() -> None:
     assert dispatch["data"]["dispatch_run_details"]["workflow_run_id"] == "11"
     assert dispatch["data"]["matched"] is True
     assert dispatch["data"]["match_status"] == "dispatch_run_details"
+    dispatch_inputs_client = FakeGiteaClient()
+    dispatch_inputs = await workflow_dispatch_and_track(
+        dispatch_inputs_client,
+        "owner/repo",
+        {"workflow_id": "ci.yml", "ref": "main", "inputs": {"env": "prod", "debug": "true"}, "confirm": True},
+    )
+    assert dispatch_inputs["ok"] is True
+    dispatch_inputs_client.assert_called(
+        "POST",
+        "/repos/owner/repo/actions/workflows/ci.yml/dispatches",
+        params={"return_run_details": True},
+        json_body={"ref": "main", "inputs": {"env": "prod", "debug": "true"}},
+    )
     try:
         await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_no_run_id"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
     except PlatformError as exc:

@@ -21,6 +21,7 @@ from .schemas import (
     required_param,
     run_matches_created_after,
     sort_runs,
+    string_map_param,
     workflow_runs_path,
 )
 
@@ -82,9 +83,7 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
     require_confirm(params)
     workflow_id = required_param(params, "workflow_id")
     ref = required_param(params, "ref")
-    inputs = params.get("inputs")
-    if inputs is not None and not isinstance(inputs, dict):
-        raise PlatformError("invalid_param", "params.inputs 必须是 object", {"param": "inputs", "actual_type": type(inputs).__name__})
+    inputs = string_map_param(params, "inputs")
     evidence: list[dict[str, Any]] = []
     dispatch_path = repo_path(repo, f"/actions/workflows/{path_segment(workflow_id)}/dispatches")
     body: dict[str, Any] = {"ref": ref}

@@ -228,7 +228,7 @@ workflow.dispatch_and_track
 
 - `workflow.rerun_job`：读取 job，校验 job 所属 `run_id`、`expected_status`、`expected_conclusion`，再调用 run-scoped job rerun endpoint。
 - `workflow.rerun_run`：读取 run，校验 `expected_head_sha`、可选 status/conclusion，再重跑 run。
-- `workflow.dispatch_and_track`：触发 workflow dispatch，再查询候选 runs。
+- `workflow.dispatch_and_track`：触发 workflow dispatch，再查询候选 runs；`inputs` 必须是 `object[string,string]`，非 string value 会在 MCP schema 层失败。
 
 共同要求：
 
