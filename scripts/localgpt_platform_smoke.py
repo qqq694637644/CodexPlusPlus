@@ -58,7 +58,9 @@ class FakeGiteaClient:
             assert "return_run_details" not in (json_body or {}), json_body
             if self.broken == "dispatch_no_run_id":
                 return None, evidence
-            return {"run_id": 11}, evidence
+            if self.broken == "dispatch_wrong_shape":
+                return {"run_id": 11}, evidence
+            return {"workflow_run_id": 11, "run_url": "https://gitea.example/api/v1/repos/owner/repo/actions/runs/11", "html_url": "https://gitea.example/owner/repo/actions/runs/11"}, evidence
         if path.endswith("/pulls/7"):
             if method == "PATCH":
                 return {
@@ -294,12 +296,23 @@ async def main() -> None:
     assert rerun_run["data"]["rerun_response"] == {"rerun": "run"}
     dispatch = await workflow_dispatch_and_track(client, "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
     assert dispatch["ok"] is True
-    assert dispatch["data"]["dispatch_response_run_id"] == "11"
+    assert dispatch["data"]["workflow_run_id"] == "11"
+    assert dispatch["data"]["dispatch_run_details"]["workflow_run_id"] == "11"
     assert dispatch["data"]["matched"] is True
-    ambiguous_dispatch = await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_no_run_id"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
-    assert ambiguous_dispatch["ok"] is True
-    assert ambiguous_dispatch["data"]["matched"] is False
-    assert ambiguous_dispatch["data"]["match_status"] == "ambiguous_candidate"
+    assert dispatch["data"]["match_status"] == "dispatch_run_details"
+    try:
+        await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_no_run_id"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
+    except PlatformError as exc:
+        assert exc.code == "unexpected_response_shape", exc.to_dict()
+    else:
+        raise AssertionError("expected missing dispatch RunDetails to fail")
+    try:
+        await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_wrong_shape"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
+    except PlatformError as exc:
+        assert exc.code == "missing_response_field", exc.to_dict()
+        assert exc.details["field"] == "workflow_run_id", exc.to_dict()
+    else:
+        raise AssertionError("expected wrong dispatch RunDetails shape to fail")
 
     published = await pr_publish(client, "owner/repo", {"mode": "create", "head": "gpt/x", "base": "main", "title": "Created", "expected_head_sha": "abc", "confirm": True})
     assert published["ok"] is True

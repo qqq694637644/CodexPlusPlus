@@ -420,7 +420,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         requires_cwd=False,
         required_params={"workflow_id": "string/integer，workflow id 或文件名", "ref": "string，dispatch ref", "confirm": "boolean，必须是 JSON true"},
         optional_params={"inputs": "object，workflow_dispatch inputs", "created_after": "string，ISO 时间，本地过滤候选 runs", "actor": "string，触发用户过滤", "candidate_limit": "integer，候选 run 数量；默认 10"},
-        returns={"data": "dispatch_response、candidate_runs、candidate_count、matched、match_status、content_returned=false。", "evidence": "dispatch 和候选 runs 查询证据。"},
+        returns={"data": "dispatch_run_details、workflow_run_id、candidate_runs、candidate_count、matched、match_status、content_returned=false。", "evidence": "dispatch 和候选 runs 查询证据。"},
         example={"operation": "workflow.dispatch_and_track", "repo": "owner/repo", "params": {"workflow_id": "ci.yml", "ref": "main", "confirm": True}},
         risk_level="high",
     ),
@@ -1076,7 +1076,7 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
         json_body=body,
         step="workflow.dispatch_and_track.dispatch",
     )
-    dispatch_response = expect_object_or_none(dispatch_data, step="workflow.dispatch_and_track.dispatch", path=dispatch_path)
+    dispatch_run_details = require_dispatch_run_details(dispatch_data, step="workflow.dispatch_and_track.dispatch", path=dispatch_path)
     evidence.append(dispatch_evidence)
 
     runs_path = workflow_runs_path(repo, workflow_id)
@@ -1089,22 +1089,21 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
     candidates = [run for run in sort_runs(runs) if run_matches_created_after(run, params.get("created_after"))]
     runs_evidence["result_count"] = len(candidates)
     evidence.append(runs_evidence)
-    response_run_id = response_run_identifier(dispatch_response)
-    match_status = "dispatch_response_run_id" if response_run_id else ("ambiguous_candidate" if candidates else "no_candidate")
+    workflow_run_id = dispatch_run_details["workflow_run_id"]
     return ok_result(
         operation="workflow.dispatch_and_track",
         data={
-            "dispatch_response": dispatch_response,
-            "dispatch_response_run_id": response_run_id,
+            "dispatch_run_details": dispatch_run_details,
+            "workflow_run_id": workflow_run_id,
             "candidate_count": len(candidates),
             "candidate_runs": [compact_run(run) for run in candidates],
-            "matched": bool(response_run_id),
-            "match_status": match_status,
+            "matched": True,
+            "match_status": "dispatch_run_details",
             "content_returned": False,
         },
         evidence=evidence,
         meta={"repo": repo, "workflow_id": workflow_id, "ref": ref},
-        next_suggested_operations=["ci.get_run_summary"] if response_run_id else [],
+        next_suggested_operations=["ci.get_run_summary"],
     )
 
 
@@ -1351,14 +1350,14 @@ def expect_object_or_none(data: Any, *, step: str, path: str) -> dict[str, Any] 
     return expect_object(data, step=step, path=path)
 
 
-def response_run_identifier(data: dict[str, Any] | None) -> str | None:
-    if not isinstance(data, dict):
-        return None
-    for key in ("run_id", "id"):
-        value = data.get(key)
-        if value is not None and str(value).strip():
-            return str(value)
-    return None
+def require_dispatch_run_details(data: Any, *, step: str, path: str) -> dict[str, Any]:
+    obj = expect_object(data, step=step, path=path)
+    workflow_run_id = require_response_field(obj, "workflow_run_id", step=step, path=path)
+    return {
+        "workflow_run_id": str(workflow_run_id),
+        "run_url": obj.get("run_url"),
+        "html_url": obj.get("html_url"),
+    }
 
 
 def run_matches_created_after(run: dict[str, Any], created_after: Any | None) -> bool:
