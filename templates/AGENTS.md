@@ -10,6 +10,8 @@
 - 先阅读，再修改，再验证。
 - 不要编造测试结果。
 - 如果遇到缺少文件、缺少依赖、缺少权限，直接说明并停止。
+- 普通 Git 操作直接使用本地 `git`。
+- 查询 Gitea CI/CD、Actions、job log、artifact、runner 时使用 `localgpt-platform` skill 和 `localgpt-gitea` MCP。
 
 ## 输出要求
 
