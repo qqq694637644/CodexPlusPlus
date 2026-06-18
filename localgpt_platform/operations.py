@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
@@ -12,51 +14,118 @@ from .result import PlatformError, error_result, ok_result
 
 OperationHandler = Callable[[GiteaClient, str | None, dict[str, Any]], Awaitable[dict[str, Any]]]
 
+_REQUIRED_SPEC_FIELDS = {
+    "category",
+    "description",
+    "repo_required",
+    "read_only_remote",
+    "writes_local_files",
+    "writes_remote",
+    "requires_cwd",
+    "required_params",
+    "optional_params",
+    "returns",
+    "example",
+    "risk_level",
+}
+
+_BRIEF_FIELDS = (
+    "name",
+    "category",
+    "description",
+    "repo_required",
+    "read_only_remote",
+    "writes_local_files",
+    "writes_remote",
+    "requires_cwd",
+    "risk_level",
+)
+
+_FAILED_CONCLUSIONS = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
+_FAILED_STATUSES = {"failure", "cancelled", "timed_out"}
+
+
+def operation_spec(
+    *,
+    category: str,
+    description: str,
+    repo_required: bool,
+    example: dict[str, Any],
+    read_only_remote: bool = True,
+    writes_local_files: bool = False,
+    writes_remote: bool = False,
+    requires_cwd: bool = False,
+    required_params: dict[str, str] | None = None,
+    optional_params: dict[str, str] | None = None,
+    returns: dict[str, str] | None = None,
+    risk_level: str = "low",
+) -> dict[str, Any]:
+    return {
+        "category": category,
+        "description": description,
+        "repo_required": repo_required,
+        "read_only_remote": read_only_remote,
+        "writes_local_files": writes_local_files,
+        "writes_remote": writes_remote,
+        "requires_cwd": requires_cwd,
+        "required_params": required_params or {},
+        "optional_params": optional_params or {},
+        "returns": returns
+        or {
+            "data": "紧凑业务结果。",
+            "meta": "repo、分页或落盘路径等元数据。",
+            "evidence": "Gitea API 调用证据列表，不含 token 或完整响应正文。",
+            "warnings": "非致命问题。",
+            "next_suggested_operations": "可选下一步 operation 名称。",
+        },
+        "example": example,
+        "risk_level": risk_level,
+    }
+
 
 OPERATION_SPECS: dict[str, dict[str, Any]] = {
-    "server.version": {
-        "description": "读取 Gitea 服务器版本。",
-        "repo_required": False,
-        "required_params": {},
-        "optional_params": {},
-        "example": {"operation": "server.version"},
-    },
-    "auth.whoami": {
-        "description": "读取当前 token 对应用户。",
-        "repo_required": False,
-        "required_params": {},
-        "optional_params": {},
-        "example": {"operation": "auth.whoami"},
-    },
-    "repo.get": {
-        "description": "读取仓库元数据。",
-        "repo_required": True,
-        "required_params": {},
-        "optional_params": {},
-        "example": {"operation": "repo.get", "repo": "owner/repo"},
-    },
-    "actions.list_workflows": {
-        "description": "列出仓库 Actions workflows。",
-        "repo_required": True,
-        "required_params": {},
-        "optional_params": {
-            "page": "integer，页码，1 起始",
-            "limit": "integer，每页数量",
-        },
-        "example": {"operation": "actions.list_workflows", "repo": "owner/repo", "params": {"limit": 20}},
-    },
-    "actions.get_workflow": {
-        "description": "读取单个 workflow。",
-        "repo_required": True,
-        "required_params": {"workflow_id": "string/integer，workflow id 或 workflow 文件名"},
-        "optional_params": {},
-        "example": {"operation": "actions.get_workflow", "repo": "owner/repo", "params": {"workflow_id": "ci.yml"}},
-    },
-    "actions.list_runs": {
-        "description": "列出 workflow runs。",
-        "repo_required": True,
-        "required_params": {},
-        "optional_params": {
+    "server.version": operation_spec(
+        category="server",
+        description="读取 Gitea 服务器版本。",
+        repo_required=False,
+        example={"operation": "server.version"},
+        returns={"data": "Gitea /version JSON。", "evidence": "GET /version 调用证据。"},
+    ),
+    "auth.whoami": operation_spec(
+        category="auth",
+        description="读取当前 token 对应用户。",
+        repo_required=False,
+        example={"operation": "auth.whoami"},
+        returns={"data": "Gitea /user JSON。", "evidence": "GET /user 调用证据。"},
+    ),
+    "repo.get": operation_spec(
+        category="repo",
+        description="读取仓库元数据。",
+        repo_required=True,
+        example={"operation": "repo.get", "repo": "owner/repo"},
+        returns={"data": "Gitea repository JSON。", "evidence": "GET /repos/{owner}/{repo} 调用证据。"},
+    ),
+    "actions.list_workflows": operation_spec(
+        category="actions",
+        description="列出仓库 Actions workflows。",
+        repo_required=True,
+        optional_params={"page": "integer，页码，1 起始", "limit": "integer，每页数量"},
+        example={"operation": "actions.list_workflows", "repo": "owner/repo", "params": {"limit": 20}},
+        returns={"data": "Gitea workflows 列表响应。", "evidence": "含 page/limit 和 result_count 的调用证据。"},
+    ),
+    "actions.get_workflow": operation_spec(
+        category="actions",
+        description="读取单个 workflow。",
+        repo_required=True,
+        required_params={"workflow_id": "string/integer，workflow id 或 workflow 文件名"},
+        example={"operation": "actions.get_workflow", "repo": "owner/repo", "params": {"workflow_id": "ci.yml"}},
+        returns={"data": "Gitea workflow JSON。", "evidence": "GET workflow 调用证据。"},
+    ),
+    "actions.list_runs": operation_spec(
+        category="ci",
+        description="列出 workflow runs。",
+        repo_required=True,
+        optional_params={
             "event": "string，workflow event name",
             "branch": "string，workflow branch",
             "status": "string，pending/queued/in_progress/failure/success/skipped",
@@ -65,96 +134,215 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
             "page": "integer，页码，1 起始",
             "limit": "integer，每页数量",
         },
-        "example": {"operation": "actions.list_runs", "repo": "owner/repo", "params": {"status": "failure", "limit": 10}},
-    },
-    "actions.get_run": {
-        "description": "读取单个 workflow run。",
-        "repo_required": True,
-        "required_params": {"run_id": "integer/string，workflow run id"},
-        "optional_params": {},
-        "example": {"operation": "actions.get_run", "repo": "owner/repo", "params": {"run_id": 123}},
-    },
-    "actions.list_run_jobs": {
-        "description": "列出 run 的 jobs。",
-        "repo_required": True,
-        "required_params": {"run_id": "integer/string，workflow run id"},
-        "optional_params": {
+        example={"operation": "actions.list_runs", "repo": "owner/repo", "params": {"status": "failure", "limit": 10}},
+        returns={"data": "Gitea workflow runs 列表响应。", "evidence": "含过滤参数和 result_count 的调用证据。"},
+    ),
+    "actions.get_run": operation_spec(
+        category="ci",
+        description="读取单个 workflow run。",
+        repo_required=True,
+        required_params={"run_id": "integer/string，workflow run id"},
+        example={"operation": "actions.get_run", "repo": "owner/repo", "params": {"run_id": 123}},
+        returns={"data": "Gitea workflow run JSON。", "evidence": "GET run 调用证据。"},
+    ),
+    "actions.list_run_jobs": operation_spec(
+        category="ci",
+        description="列出 run 的 jobs。",
+        repo_required=True,
+        required_params={"run_id": "integer/string，workflow run id"},
+        optional_params={
             "attempt": "integer/string，指定 attempt 时查询该 attempt 的 jobs",
             "page": "integer，页码，1 起始",
             "limit": "integer，每页数量",
         },
-        "example": {"operation": "actions.list_run_jobs", "repo": "owner/repo", "params": {"run_id": 123}},
-    },
-    "actions.get_job": {
-        "description": "读取单个 job。",
-        "repo_required": True,
-        "required_params": {"job_id": "integer/string，job id"},
-        "optional_params": {},
-        "example": {"operation": "actions.get_job", "repo": "owner/repo", "params": {"job_id": 456}},
-    },
-    "actions.download_job_log": {
-        "description": "下载单个 job 日志到 cwd/jobs/<job_id>/job.log，只返回文件路径和大小。",
-        "repo_required": True,
-        "required_params": {
+        example={"operation": "actions.list_run_jobs", "repo": "owner/repo", "params": {"run_id": 123}},
+        returns={"data": "Gitea run jobs 列表响应。", "evidence": "含 page/limit 和 result_count 的调用证据。"},
+    ),
+    "actions.get_job": operation_spec(
+        category="ci",
+        description="读取单个 job。",
+        repo_required=True,
+        required_params={"job_id": "integer/string，job id"},
+        example={"operation": "actions.get_job", "repo": "owner/repo", "params": {"job_id": 456}},
+        returns={"data": "Gitea job JSON。", "evidence": "GET job 调用证据。"},
+    ),
+    "actions.download_job_log": operation_spec(
+        category="ci",
+        description="下载单个 job 日志到 cwd/jobs/<job_id>/job.log，只返回文件路径和大小。",
+        repo_required=True,
+        writes_local_files=True,
+        requires_cwd=True,
+        required_params={
             "cwd": "string，当前 Codex workspace 目录，作为所有 job 文件落盘根目录",
             "job_id": "integer/string，job id",
         },
-        "optional_params": {},
-        "example": {"operation": "actions.download_job_log", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456}},
-    },
-    "actions.list_artifacts": {
-        "description": "列出仓库或 run 的 artifacts。",
-        "repo_required": True,
-        "required_params": {},
-        "optional_params": {
-            "run_id": "integer/string，传入时只列出该 run 的 artifacts",
-            "page": "integer，页码，1 起始",
-            "limit": "integer，每页数量",
-        },
-        "example": {"operation": "actions.list_artifacts", "repo": "owner/repo", "params": {"run_id": 123}},
-    },
-    "actions.download_artifact": {
-        "description": "下载 artifact 到 cwd/jobs/<job_id>/artifact/，只返回目录路径和文件信息。",
-        "repo_required": True,
-        "required_params": {
+        example={"operation": "actions.download_job_log", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456}},
+        returns={"data": "job_id、job_dir、log_path、bytes、content_returned=false。", "evidence": "含 download_path 和 bytes 的 GET job logs 调用证据。"},
+        risk_level="medium",
+    ),
+    "actions.list_artifacts": operation_spec(
+        category="artifact",
+        description="列出仓库或 run 的 artifacts。",
+        repo_required=True,
+        optional_params={"run_id": "integer/string，传入时只列出该 run 的 artifacts", "page": "integer，页码，1 起始", "limit": "integer，每页数量"},
+        example={"operation": "actions.list_artifacts", "repo": "owner/repo", "params": {"run_id": 123}},
+        returns={"data": "Gitea artifacts 列表响应。", "evidence": "含 page/limit 和 result_count 的调用证据。"},
+    ),
+    "actions.download_artifact": operation_spec(
+        category="artifact",
+        description="下载 artifact 到 cwd/jobs/<job_id>/artifact/，只返回目录路径和文件信息。",
+        repo_required=True,
+        writes_local_files=True,
+        requires_cwd=True,
+        required_params={
             "cwd": "string，当前 Codex workspace 目录，作为所有 job 文件落盘根目录",
             "job_id": "integer/string，job id，用于目录 cwd/jobs/<job_id>/artifact/",
             "artifact_id": "integer/string，artifact id",
         },
-        "optional_params": {
-            "artifact_name": "string，用于 zip 文件名；缺省为 artifact-<artifact_id>",
-            "extract": "boolean，是否解压；默认 true",
-        },
-        "example": {
+        optional_params={"artifact_name": "string，用于 zip 文件名；缺省为 artifact-<artifact_id>", "extract": "boolean，是否解压；默认 true"},
+        example={
             "operation": "actions.download_artifact",
             "repo": "owner/repo",
             "params": {"cwd": "D:/work/project", "job_id": 456, "artifact_id": 789, "artifact_name": "test-results", "extract": True},
         },
-    },
-    "actions.list_runners": {
-        "description": "列出仓库级 runners。",
-        "repo_required": True,
-        "required_params": {},
-        "optional_params": {"disabled": "boolean，按禁用状态过滤"},
-        "example": {"operation": "actions.list_runners", "repo": "owner/repo", "params": {"disabled": False}},
-    },
+        returns={"data": "artifact_id、zip_path、artifact_dir、manifest_path、extracted_files。", "evidence": "含 download_path 和 bytes 的 artifact 下载证据。"},
+        risk_level="medium",
+    ),
+    "actions.list_runners": operation_spec(
+        category="runner",
+        description="列出仓库级 runners。",
+        repo_required=True,
+        optional_params={"disabled": "boolean，按禁用状态过滤"},
+        example={"operation": "actions.list_runners", "repo": "owner/repo", "params": {"disabled": False}},
+        returns={"data": "Gitea runners 列表响应。", "evidence": "GET runners 调用证据。"},
+    ),
+    "ci.prepare_failure_context": operation_spec(
+        category="ci",
+        description="定位失败 run，列出失败 jobs，并把失败 job 日志下载到 cwd/jobs/<job_id>/job.log。",
+        repo_required=True,
+        writes_local_files=True,
+        requires_cwd=True,
+        required_params={"cwd": "string，当前 Codex workspace 目录"},
+        optional_params={
+            "run_id": "integer/string，指定 workflow run",
+            "branch": "string，按分支定位 run",
+            "head_sha": "string，按 commit sha 定位 run",
+            "status": "string，按 run 状态定位；缺省 failure",
+            "attempt": "integer/string，指定 run attempt jobs",
+            "include_artifacts": "boolean，是否列出 run artifacts；默认 true",
+            "max_failed_jobs": "integer，最多下载多少个失败 job 日志；默认 20",
+            "page": "integer，页码",
+            "limit": "integer，每页数量；定位 run 缺省 10",
+        },
+        example={"operation": "ci.prepare_failure_context", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "head_sha": "abc123", "status": "failure"}},
+        returns={"data": "run summary、failed_jobs、log_paths、artifact_candidates、content_returned=false。", "evidence": "内部每次 Gitea API 调用证据列表。"},
+        risk_level="medium",
+    ),
+    "artifact.sync_for_run": operation_spec(
+        category="artifact",
+        description="列出并下载某个 run 的 artifacts，解压到 cwd/jobs/run-<run_id>/artifact/ 并写 manifest.json。",
+        repo_required=True,
+        writes_local_files=True,
+        requires_cwd=True,
+        required_params={"cwd": "string，当前 Codex workspace 目录", "run_id": "integer/string，workflow run id"},
+        optional_params={
+            "artifact_name_pattern": "string，fnmatch 风格 artifact 名称过滤",
+            "job_id": "integer/string，可显式指定落盘 job 目录；缺省 run-<run_id>",
+            "extract": "boolean，是否解压；默认 true",
+            "page": "integer，页码",
+            "limit": "integer，每页数量",
+        },
+        example={"operation": "artifact.sync_for_run", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "run_id": 123, "artifact_name_pattern": "test-*"}},
+        returns={"data": "manifest_path、artifact_dir、zip_paths、artifact_dirs、file_count。", "evidence": "list artifacts 和每个 artifact 下载证据。"},
+        risk_level="medium",
+    ),
+    "pr.preflight": operation_spec(
+        category="pr",
+        description="读取 PR metadata、changed files summary，并查询 head_sha 相关 CI runs。",
+        repo_required=True,
+        required_params={"pr_number": "integer/string，PR 编号"},
+        optional_params={
+            "page": "integer，changed files 页码",
+            "limit": "integer，changed files 每页数量；默认 100",
+            "ci_limit": "integer，head_sha CI runs 数量；默认 10",
+            "file_limit": "integer，返回文件摘要最大数量；默认 100",
+        },
+        example={"operation": "pr.preflight", "repo": "owner/repo", "params": {"pr_number": 42, "ci_limit": 10}},
+        returns={"data": "PR state、base/head/head_sha、changed_files summary、ci summary。", "evidence": "PR、files、CI runs 查询证据。"},
+    ),
 }
 
 
-def describe_operations() -> dict[str, Any]:
-    return {
+def describe_operations(
+    *,
+    category: str | None = None,
+    operation: str | None = None,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    operation_name = operation.strip() if operation else None
+    detail_value = (detail or ("full" if operation_name else "brief")).strip().lower()
+    categories = sorted({spec["category"] for spec in OPERATION_SPECS.values()})
+    base: dict[str, Any] = {
         "provider": "gitea",
         "write_operations_enabled": False,
-        "operations": [
-            {"name": name, **spec}
-            for name, spec in sorted(OPERATION_SPECS.items())
-        ],
+        "detail": detail_value,
+        "categories": categories,
         "repo_format": "owner/repo",
         "pagination": "支持 page 和 limit 参数时透传给 Gitea API。",
         "job_output_root": "需要由调用方传入 params.cwd；job log 和 artifact 都写入 cwd/jobs/<job_id>/。",
         "artifact_default_dir": "<cwd>/jobs/<job_id>/artifact/",
         "job_log_path": "<cwd>/jobs/<job_id>/job.log",
     }
+    if detail_value not in {"brief", "full"}:
+        return {**base, "ok": False, "error": {"code": "invalid_detail", "message": "detail 必须是 brief 或 full", "details": {"detail": detail}}}
+    if operation_name:
+        spec = OPERATION_SPECS.get(operation_name)
+        if spec is None:
+            return {
+                **base,
+                "ok": False,
+                "error": {"code": "unknown_operation", "message": "未知 operation", "details": {"operation": operation_name, "available": sorted(OPERATION_SPECS)}},
+            }
+        return {**base, "ok": True, "operation": operation_for_output(operation_name, spec, detail_value)}
+
+    category_filter = category.strip().lower() if category else None
+    operations = []
+    for name, spec in sorted(OPERATION_SPECS.items()):
+        if category_filter and spec["category"] != category_filter:
+            continue
+        operations.append(operation_for_output(name, spec, detail_value))
+    return {**base, "ok": True, "category": category_filter, "operations": operations}
+
+
+def operation_for_output(name: str, spec: dict[str, Any], detail: str) -> dict[str, Any]:
+    full = {"name": name, **spec}
+    if detail == "full":
+        return full
+    return {field: full[field] for field in _BRIEF_FIELDS}
+
+
+async def check_status() -> dict[str, Any]:
+    evidence: list[dict[str, Any]] = []
+    warnings: list[Any] = []
+    try:
+        config = load_gitea_config(require_token=False)
+        client = GiteaClient(config)
+        version, version_evidence = await client.request_json("GET", "/version", require_token=False, step="server.version")
+        evidence.append(version_evidence)
+        data: dict[str, Any] = {"reachable": True, "version": version, "authenticated": False}
+        if config.token:
+            try:
+                user, user_evidence = await client.request_json("GET", "/user", step="auth.whoami")
+                evidence.append(user_evidence)
+                data["authenticated"] = True
+                data["user"] = compact_user(user)
+            except PlatformError as exc:
+                warnings.append({"code": exc.code, "message": exc.message, "details": exc.details})
+        else:
+            warnings.append({"code": "missing_token", "message": "未设置 GITEA_TOKEN，仅检查服务器版本。"})
+        return ok_result(operation="gitea_status", data=data, evidence=evidence, warnings=warnings)
+    except PlatformError as exc:
+        return error_result(operation="gitea_status", error=exc, evidence=evidence, warnings=warnings)
 
 
 async def execute_operation(
@@ -168,12 +356,11 @@ async def execute_operation(
     if operation not in HANDLERS:
         return error_result(
             operation=operation or "<missing>",
-            error=PlatformError(
-                "unknown_operation",
-                "未知或未启用的 operation",
-                {"operation": operation, "available": sorted(HANDLERS)},
-            ),
+            error=PlatformError("unknown_operation", "未知或未启用的 operation", {"operation": operation, "available": sorted(HANDLERS)}),
         )
+    validation_error = validate_request(operation, repo, params)
+    if validation_error:
+        return error_result(operation=operation, error=validation_error)
 
     try:
         config = load_gitea_config(require_token=operation != "server.version")
@@ -184,59 +371,47 @@ async def execute_operation(
 
 
 async def server_version(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
-    data, evidence = await client.request_json("GET", "/version", require_token=False)
+    data, evidence = await client.request_json("GET", "/version", require_token=False, step="server.version")
     return ok_result(operation="server.version", data=data, evidence=evidence)
 
 
 async def auth_whoami(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
-    data, evidence = await client.request_json("GET", "/user")
+    data, evidence = await client.request_json("GET", "/user", step="auth.whoami")
     return ok_result(operation="auth.whoami", data=data, evidence=evidence)
 
 
 async def get_repo(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
-    data, evidence = await client.request_json("GET", repo_path(repo))
+    data, evidence = await client.request_json("GET", repo_path(repo), step="repo.get")
     return ok_result(operation="repo.get", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def list_workflows(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, "/actions/workflows"),
-        params=page_params(params),
-    )
+    data, evidence = await client.request_json("GET", repo_path(repo, "/actions/workflows"), params=page_params(params), step="actions.list_workflows")
+    add_result_count(evidence, data, ("workflows",))
     return ok_result(operation="actions.list_workflows", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def get_workflow(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     workflow_id = required_param(params, "workflow_id")
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, f"/actions/workflows/{path_segment(workflow_id)}"),
-    )
+    data, evidence = await client.request_json("GET", repo_path(repo, f"/actions/workflows/{path_segment(workflow_id)}"), step="actions.get_workflow")
     return ok_result(operation="actions.get_workflow", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def list_runs(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     allowed = {"event", "branch", "status", "actor", "head_sha", "page", "limit"}
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, "/actions/runs"),
-        params=filter_params(params, allowed),
-    )
+    data, evidence = await client.request_json("GET", repo_path(repo, "/actions/runs"), params=filter_params(params, allowed), step="actions.list_runs")
+    add_result_count(evidence, data, ("workflow_runs", "runs"))
     return ok_result(operation="actions.list_runs", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def get_run(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     run_id = required_param(params, "run_id")
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, f"/actions/runs/{path_segment(run_id)}"),
-    )
+    data, evidence = await client.request_json("GET", repo_path(repo, f"/actions/runs/{path_segment(run_id)}"), step="actions.get_run")
     return ok_result(operation="actions.get_run", data=data, evidence=evidence, meta={"repo": repo})
 
 
@@ -244,129 +419,303 @@ async def list_run_jobs(client: GiteaClient, repo: str | None, params: dict[str,
     require_repo(repo)
     run_id = required_param(params, "run_id")
     attempt = params.get("attempt")
-    suffix = (
-        f"/actions/runs/{path_segment(run_id)}/attempts/{path_segment(str(attempt))}/jobs"
-        if attempt
-        else f"/actions/runs/{path_segment(run_id)}/jobs"
-    )
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, suffix),
-        params=page_params(params),
-    )
+    suffix = f"/actions/runs/{path_segment(run_id)}/attempts/{path_segment(str(attempt))}/jobs" if attempt else f"/actions/runs/{path_segment(run_id)}/jobs"
+    data, evidence = await client.request_json("GET", repo_path(repo, suffix), params=page_params(params), step="actions.list_run_jobs")
+    add_result_count(evidence, data, ("workflow_jobs", "jobs"))
     return ok_result(operation="actions.list_run_jobs", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def get_job(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     job_id = required_param(params, "job_id")
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, f"/actions/jobs/{path_segment(job_id)}"),
-    )
+    data, evidence = await client.request_json("GET", repo_path(repo, f"/actions/jobs/{path_segment(job_id)}"), step="actions.get_job")
     return ok_result(operation="actions.get_job", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def download_job_log(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
-    job_id = required_param(params, "job_id")
     cwd = workspace_root(params)
-    job_dir = job_output_dir(cwd, job_id)
-    log_path = job_dir / "job.log"
-    assert_relative_to_root(log_path, cwd)
-    log_text, evidence = await client.request_text(
-        "GET",
-        repo_path(repo, f"/actions/jobs/{path_segment(job_id)}/logs"),
-    )
-    job_dir.mkdir(parents=True, exist_ok=True)
-    log_path.write_text(log_text, encoding="utf-8")
-    evidence["download_path"] = str(log_path)
-    evidence["bytes"] = log_path.stat().st_size
-    return ok_result(
-        operation="actions.download_job_log",
-        data={
-            "job_id": job_id,
-            "cwd": str(cwd),
-            "job_dir": str(job_dir),
-            "log_path": str(log_path),
-            "bytes": log_path.stat().st_size,
-            "content_returned": False,
-        },
-        evidence=evidence,
-        meta={"repo": repo},
-    )
+    job_id = required_param(params, "job_id")
+    data, evidence = await download_job_log_to_path(client, repo, cwd, job_id, step="actions.download_job_log")
+    return ok_result(operation="actions.download_job_log", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def list_artifacts(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     run_id = params.get("run_id")
     suffix = f"/actions/runs/{path_segment(str(run_id))}/artifacts" if run_id else "/actions/artifacts"
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, suffix),
-        params=page_params(params),
-    )
+    data, evidence = await client.request_json("GET", repo_path(repo, suffix), params=page_params(params), step="actions.list_artifacts")
+    add_result_count(evidence, data, ("artifacts",))
     return ok_result(operation="actions.list_artifacts", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def download_artifact(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     if "target_dir" in params:
-        raise PlatformError(
-            "forbidden_param",
-            "actions.download_artifact 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/artifact/",
-            {"param": "target_dir"},
-        )
+        raise PlatformError("forbidden_param", "actions.download_artifact 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/artifact/", {"param": "target_dir"})
     cwd = workspace_root(params)
     job_id = required_param(params, "job_id")
     artifact_id = required_param(params, "artifact_id")
     artifact_name = safe_name(str(params.get("artifact_name") or f"artifact-{artifact_id}"))
-    extract = bool(params.get("extract", True))
-    job_dir = job_output_dir(cwd, job_id)
-    artifact_dir = job_dir / "artifact"
-    zip_path = artifact_dir / f"{artifact_name}.zip"
-    assert_relative_to_root(artifact_dir, cwd)
-    assert_relative_to_root(zip_path, cwd)
-    evidence = await client.download(
-        repo_path(repo, f"/actions/artifacts/{path_segment(artifact_id)}/zip"),
-        zip_path,
+    extract = bool_param(params, "extract", True)
+    data, evidence = await download_artifact_to_path(client, repo, cwd, job_id, artifact_id, artifact_name, extract=extract, step="actions.download_artifact")
+    manifest_path = write_manifest(
+        Path(data["artifact_dir"]),
+        cwd,
+        {"operation": "actions.download_artifact", "repo": repo, "generated_at": utc_now(), "job_id": job_id, "artifacts": [data]},
     )
-
-    extracted_files: list[str] = []
-    if extract:
-        extracted_files = extract_zip(zip_path, artifact_dir)
-
-    return ok_result(
-        operation="actions.download_artifact",
-        data={
-            "artifact_id": artifact_id,
-            "job_id": job_id,
-            "artifact_name": artifact_name,
-            "cwd": str(cwd),
-            "job_dir": str(job_dir),
-            "zip_path": str(zip_path),
-            "artifact_dir": str(artifact_dir),
-            "extracted": extract,
-            "extracted_files": extracted_files,
-        },
-        evidence=evidence,
-        meta={"repo": repo},
-    )
+    data["manifest_path"] = str(manifest_path)
+    return ok_result(operation="actions.download_artifact", data=data, evidence=evidence, meta={"repo": repo})
 
 
 async def list_runners(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
-    data, evidence = await client.request_json(
-        "GET",
-        repo_path(repo, "/actions/runners"),
-        params=filter_params(params, {"disabled"}),
-    )
+    data, evidence = await client.request_json("GET", repo_path(repo, "/actions/runners"), params=filter_params(params, {"disabled"}), step="actions.list_runners")
+    add_result_count(evidence, data, ("runners",))
     return ok_result(operation="actions.list_runners", data=data, evidence=evidence, meta={"repo": repo})
+
+
+async def ci_prepare_failure_context(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
+    require_repo(repo)
+    cwd = workspace_root(params)
+    evidence: list[dict[str, Any]] = []
+    warnings: list[Any] = []
+    run_id = params.get("run_id")
+
+    if run_id:
+        run_data, run_evidence = await client.request_json("GET", repo_path(repo, f"/actions/runs/{path_segment(str(run_id))}"), step="ci.get_run")
+        evidence.append(run_evidence)
+    else:
+        run_params = filter_params(params, {"branch", "head_sha", "event", "actor", "page"})
+        run_params["status"] = str(params.get("status") or "failure")
+        run_params["limit"] = int_param(params, "limit", 10, minimum=1)
+        runs_data, runs_evidence = await client.request_json("GET", repo_path(repo, "/actions/runs"), params=run_params, step="ci.list_runs")
+        add_result_count(runs_evidence, runs_data, ("workflow_runs", "runs"))
+        evidence.append(runs_evidence)
+        runs = extract_items(runs_data, ("workflow_runs", "runs"))
+        if not runs:
+            raise PlatformError("run_not_found", "未找到匹配的 workflow run", {"params": run_params})
+        run_data = runs[0]
+        run_id = scalar(run_data, "id", "run_id")
+        if run_id is None:
+            raise PlatformError("missing_run_id", "匹配的 workflow run 缺少 id", {"run": compact_run(run_data)})
+
+    run_id_str = str(run_id)
+    job_params = page_params(params)
+    attempt = params.get("attempt")
+    suffix = (
+        f"/actions/runs/{path_segment(run_id_str)}/attempts/{path_segment(str(attempt))}/jobs"
+        if attempt
+        else f"/actions/runs/{path_segment(run_id_str)}/jobs"
+    )
+    jobs_data, jobs_evidence = await client.request_json("GET", repo_path(repo, suffix), params=job_params, step="ci.list_run_jobs")
+    add_result_count(jobs_evidence, jobs_data, ("workflow_jobs", "jobs"))
+    evidence.append(jobs_evidence)
+
+    jobs = extract_items(jobs_data, ("workflow_jobs", "jobs"))
+    failed_jobs = [job for job in jobs if is_failed_job(job)]
+    max_failed_jobs = int_param(params, "max_failed_jobs", 20, minimum=1)
+    log_paths: list[str] = []
+    failed_summaries: list[dict[str, Any]] = []
+
+    for job in failed_jobs[:max_failed_jobs]:
+        summary = compact_job(job)
+        job_id = scalar(job, "id", "job_id")
+        if job_id is None:
+            warnings.append({"code": "missing_job_id", "message": "失败 job 缺少 id，无法下载日志。", "job": summary})
+            failed_summaries.append(summary)
+            continue
+        log_data, log_evidence = await download_job_log_to_path(client, repo, cwd, str(job_id), step="ci.download_failed_job_log")
+        evidence.append(log_evidence)
+        summary.update({"log_path": log_data["log_path"], "log_bytes": log_data["bytes"], "content_returned": False})
+        log_paths.append(log_data["log_path"])
+        failed_summaries.append(summary)
+
+    if len(failed_jobs) > max_failed_jobs:
+        warnings.append({"code": "failed_job_limit", "message": "只下载了部分失败 job 日志。", "downloaded": max_failed_jobs, "total_failed_jobs": len(failed_jobs)})
+
+    artifact_candidates: list[dict[str, Any]] = []
+    if bool_param(params, "include_artifacts", True):
+        artifacts_data, artifacts_evidence = await client.request_json("GET", repo_path(repo, f"/actions/runs/{path_segment(run_id_str)}/artifacts"), params=page_params(params), step="ci.list_artifacts")
+        add_result_count(artifacts_evidence, artifacts_data, ("artifacts",))
+        evidence.append(artifacts_evidence)
+        artifact_candidates = [compact_artifact(artifact) for artifact in extract_items(artifacts_data, ("artifacts",))]
+
+    next_ops = ["actions.download_job_log"] if failed_summaries and not log_paths else []
+    if artifact_candidates:
+        next_ops.append("artifact.sync_for_run")
+
+    return ok_result(
+        operation="ci.prepare_failure_context",
+        data={
+            "run": compact_run(run_data),
+            "failed_jobs": failed_summaries,
+            "failed_job_count": len(failed_jobs),
+            "log_paths": log_paths,
+            "artifact_candidates": artifact_candidates,
+            "content_returned": False,
+        },
+        evidence=evidence,
+        meta={"repo": repo, "cwd": str(cwd), "run_id": run_id_str},
+        warnings=warnings,
+        next_suggested_operations=next_ops,
+    )
+
+
+async def artifact_sync_for_run(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
+    require_repo(repo)
+    if "target_dir" in params:
+        raise PlatformError("forbidden_param", "artifact.sync_for_run 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/run-<run_id>/artifact/", {"param": "target_dir"})
+    cwd = workspace_root(params)
+    run_id = required_param(params, "run_id")
+    job_id = str(params.get("job_id") or f"run-{run_id}")
+    pattern = str(params.get("artifact_name_pattern") or "").strip()
+    extract = bool_param(params, "extract", True)
+    evidence: list[dict[str, Any]] = []
+    warnings: list[Any] = []
+
+    artifacts_data, artifacts_evidence = await client.request_json(
+        "GET",
+        repo_path(repo, f"/actions/runs/{path_segment(run_id)}/artifacts"),
+        params=page_params(params),
+        step="artifact.list_artifacts",
+    )
+    add_result_count(artifacts_evidence, artifacts_data, ("artifacts",))
+    evidence.append(artifacts_evidence)
+
+    artifacts = extract_items(artifacts_data, ("artifacts",))
+    selected = []
+    for artifact in artifacts:
+        name = str(scalar(artifact, "name") or scalar(artifact, "artifact_name") or scalar(artifact, "id", "artifact_id") or "artifact")
+        if pattern and not fnmatch.fnmatch(name, pattern):
+            continue
+        selected.append(artifact)
+
+    downloaded: list[dict[str, Any]] = []
+    for artifact in selected:
+        artifact_id = scalar(artifact, "id", "artifact_id")
+        if artifact_id is None:
+            warnings.append({"code": "missing_artifact_id", "message": "artifact 缺少 id，已跳过。", "artifact": compact_artifact(artifact)})
+            continue
+        artifact_name = safe_name(str(scalar(artifact, "name", "artifact_name") or f"artifact-{artifact_id}"))
+        data, download_evidence = await download_artifact_to_path(
+            client,
+            repo,
+            cwd,
+            job_id,
+            str(artifact_id),
+            artifact_name,
+            extract=extract,
+            step="artifact.download_artifact",
+            extract_dir_name=artifact_name,
+        )
+        data["source"] = compact_artifact(artifact)
+        evidence.append(download_evidence)
+        downloaded.append(data)
+
+    artifact_root = job_output_dir(cwd, job_id) / "artifact"
+    assert_relative_to_root(artifact_root, cwd)
+    manifest = {
+        "operation": "artifact.sync_for_run",
+        "repo": repo,
+        "run_id": run_id,
+        "job_id": job_id,
+        "artifact_name_pattern": pattern or None,
+        "generated_at": utc_now(),
+        "artifacts": downloaded,
+    }
+    manifest_path = write_manifest(artifact_root, cwd, manifest)
+    file_count = sum(int(item.get("extracted_file_count", 0)) for item in downloaded)
+
+    if not selected:
+        warnings.append({"code": "no_artifacts_selected", "message": "没有 artifact 匹配当前条件。", "artifact_name_pattern": pattern or None})
+
+    return ok_result(
+        operation="artifact.sync_for_run",
+        data={
+            "run_id": run_id,
+            "job_id": job_id,
+            "manifest_path": str(manifest_path),
+            "artifact_dir": str(artifact_root),
+            "zip_paths": [item["zip_path"] for item in downloaded],
+            "artifact_dirs": [item["extract_dir"] for item in downloaded if item.get("extract_dir")],
+            "file_count": file_count,
+            "artifacts": downloaded,
+            "content_returned": False,
+        },
+        evidence=evidence,
+        meta={"repo": repo, "cwd": str(cwd), "run_id": run_id},
+        warnings=warnings,
+        next_suggested_operations=[],
+    )
+
+
+async def pr_preflight(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
+    require_repo(repo)
+    pr_number = required_param(params, "pr_number")
+    evidence: list[dict[str, Any]] = []
+
+    pr_data, pr_evidence = await client.request_json("GET", repo_path(repo, f"/pulls/{path_segment(pr_number)}"), step="pr.get")
+    evidence.append(pr_evidence)
+
+    files_params = {"page": params.get("page", 1), "limit": int_param(params, "limit", 100, minimum=1)}
+    files_data, files_evidence = await client.request_json("GET", repo_path(repo, f"/pulls/{path_segment(pr_number)}/files"), params=files_params, step="pr.list_files")
+    add_result_count(files_evidence, files_data, ("files",))
+    evidence.append(files_evidence)
+
+    files = extract_items(files_data, ("files",))
+    file_limit = int_param(params, "file_limit", 100, minimum=1)
+    head_sha = pr_head_sha(pr_data)
+    ci_summary: dict[str, Any] = {"head_sha": head_sha, "runs": [], "run_count": 0}
+    if head_sha:
+        ci_params = {"head_sha": head_sha, "limit": int_param(params, "ci_limit", 10, minimum=1)}
+        runs_data, runs_evidence = await client.request_json("GET", repo_path(repo, "/actions/runs"), params=ci_params, step="pr.list_head_ci_runs")
+        add_result_count(runs_evidence, runs_data, ("workflow_runs", "runs"))
+        evidence.append(runs_evidence)
+        runs = extract_items(runs_data, ("workflow_runs", "runs"))
+        ci_summary = {"head_sha": head_sha, "run_count": len(runs), "runs": [compact_run(run) for run in runs]}
+    else:
+        ci_summary["warning"] = "PR response 缺少 head sha，未查询 CI runs。"
+
+    changed_files = [compact_file(file) for file in files[:file_limit]]
+    data = {
+        "pr": compact_pr(pr_data),
+        "state": scalar(pr_data, "state"),
+        "base": compact_ref(pr_data.get("base") if isinstance(pr_data, dict) else None),
+        "head": compact_ref(pr_data.get("head") if isinstance(pr_data, dict) else None),
+        "head_sha": head_sha,
+        "changed_files": {
+            "count": len(files),
+            "returned": len(changed_files),
+            "files": changed_files,
+        },
+        "ci": ci_summary,
+    }
+    return ok_result(
+        operation="pr.preflight",
+        data=data,
+        evidence=evidence,
+        meta={"repo": repo, "pr_number": pr_number},
+        next_suggested_operations=["ci.prepare_failure_context"] if any(is_failed_run(run) for run in ci_summary.get("runs", [])) else [],
+    )
 
 
 def require_repo(repo: str | None) -> None:
     if not repo:
         raise PlatformError("missing_repo", "该 operation 需要 repo 参数", {"repo_format": "owner/repo"})
+
+
+def validate_request(operation: str, repo: str | None, params: dict[str, Any]) -> PlatformError | None:
+    spec = OPERATION_SPECS[operation]
+    if spec["repo_required"] and not repo:
+        return PlatformError("missing_repo", "该 operation 需要 repo 参数", {"repo_format": "owner/repo"})
+    if spec["writes_local_files"] and "target_dir" in params:
+        return PlatformError("forbidden_param", "本地落盘 operation 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/。", {"param": "target_dir"})
+    for name in spec["required_params"]:
+        value = params.get(name)
+        if value is None or str(value).strip() == "":
+            return PlatformError("missing_param", f"缺少 params.{name}", {"param": name})
+    return None
 
 
 def required_param(params: dict[str, Any], name: str) -> str:
@@ -377,15 +726,38 @@ def required_param(params: dict[str, Any], name: str) -> str:
 
 
 def filter_params(params: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in params.items()
-        if key in allowed and value is not None and value != ""
-    }
+    return {key: value for key, value in params.items() if key in allowed and value is not None and value != ""}
 
 
 def page_params(params: dict[str, Any]) -> dict[str, Any]:
     return filter_params(params, {"page", "limit"})
+
+
+def bool_param(params: dict[str, Any], name: str, default: bool) -> bool:
+    value = params.get(name)
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    raise PlatformError("invalid_param", f"params.{name} 必须是 boolean", {"param": name, "value": value})
+
+
+def int_param(params: dict[str, Any], name: str, default: int, *, minimum: int | None = None) -> int:
+    value = params.get(name, default)
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise PlatformError("invalid_param", f"params.{name} 必须是 integer", {"param": name, "value": value}) from exc
+    if minimum is not None and number < minimum:
+        raise PlatformError("invalid_param", f"params.{name} 必须大于等于 {minimum}", {"param": name, "value": value, "minimum": minimum})
+    return number
 
 
 def safe_name(value: str) -> str:
@@ -408,11 +780,7 @@ def extract_zip(zip_path: Path, target_dir: Path) -> list[str]:
             try:
                 member_path.relative_to(target_root)
             except ValueError as exc:
-                raise PlatformError(
-                    "unsafe_artifact_zip",
-                    "artifact zip 包含越界路径",
-                    {"member": member.filename},
-                ) from exc
+                raise PlatformError("unsafe_artifact_zip", "artifact zip 包含越界路径", {"member": member.filename}) from exc
             member_path.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source, member_path.open("wb") as target:
                 target.write(source.read())
@@ -424,11 +792,7 @@ def workspace_root(params: dict[str, Any]) -> Path:
     raw = required_param(params, "cwd")
     root = Path(raw).resolve()
     if not root.is_dir():
-        raise PlatformError(
-            "invalid_cwd",
-            "params.cwd 必须是已存在的目录",
-            {"cwd": raw, "resolved": str(root)},
-        )
+        raise PlatformError("invalid_cwd", "params.cwd 必须是已存在的目录", {"cwd": raw, "resolved": str(root)})
     return root
 
 
@@ -440,15 +804,224 @@ def assert_relative_to_root(path: Path, root: Path) -> None:
     try:
         path.resolve().relative_to(root.resolve())
     except ValueError as exc:
-        raise PlatformError(
-            "artifact_path_outside_root",
-            "artifact 目标路径不在 params.cwd 内",
-            {"path": str(path), "cwd": str(root)},
-        ) from exc
+        raise PlatformError("artifact_path_outside_root", "artifact 目标路径不在 params.cwd 内", {"path": str(path), "cwd": str(root)}) from exc
+
+
+async def download_job_log_to_path(client: GiteaClient, repo: str, cwd: Path, job_id: str, *, step: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    job_dir = job_output_dir(cwd, job_id)
+    log_path = job_dir / "job.log"
+    assert_relative_to_root(log_path, cwd)
+    log_text, evidence = await client.request_text("GET", repo_path(repo, f"/actions/jobs/{path_segment(job_id)}/logs"), step=step)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(log_text, encoding="utf-8")
+    evidence["download_path"] = str(log_path)
+    evidence["bytes"] = log_path.stat().st_size
+    return (
+        {
+            "job_id": job_id,
+            "cwd": str(cwd),
+            "job_dir": str(job_dir),
+            "log_path": str(log_path),
+            "bytes": log_path.stat().st_size,
+            "content_returned": False,
+        },
+        evidence,
+    )
+
+
+async def download_artifact_to_path(
+    client: GiteaClient,
+    repo: str,
+    cwd: Path,
+    job_id: str,
+    artifact_id: str,
+    artifact_name: str,
+    *,
+    extract: bool,
+    step: str,
+    extract_dir_name: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    job_dir = job_output_dir(cwd, job_id)
+    artifact_dir = job_dir / "artifact"
+    zip_path = artifact_dir / f"{safe_name(artifact_name)}.zip"
+    assert_relative_to_root(artifact_dir, cwd)
+    assert_relative_to_root(zip_path, cwd)
+    evidence = await client.download(repo_path(repo, f"/actions/artifacts/{path_segment(artifact_id)}/zip"), zip_path, step=step)
+
+    extract_dir = artifact_dir / safe_name(extract_dir_name) if extract_dir_name else artifact_dir
+    assert_relative_to_root(extract_dir, cwd)
+    extracted_files: list[str] = []
+    if extract:
+        extracted_files = extract_zip(zip_path, extract_dir)
+
+    return (
+        {
+            "artifact_id": artifact_id,
+            "job_id": job_id,
+            "artifact_name": safe_name(artifact_name),
+            "cwd": str(cwd),
+            "job_dir": str(job_dir),
+            "zip_path": str(zip_path),
+            "artifact_dir": str(artifact_dir),
+            "extract_dir": str(extract_dir) if extract else None,
+            "extracted": extract,
+            "extracted_file_count": len(extracted_files),
+            "extracted_files": extracted_files[:200],
+            "extracted_files_truncated": len(extracted_files) > 200,
+            "content_returned": False,
+        },
+        evidence,
+    )
+
+
+def write_manifest(artifact_dir: Path, cwd: Path, manifest: dict[str, Any]) -> Path:
+    assert_relative_to_root(artifact_dir, cwd)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = artifact_dir / "manifest.json"
+    assert_relative_to_root(manifest_path, cwd)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path
+
+
+def add_result_count(evidence: dict[str, Any], data: Any, keys: tuple[str, ...]) -> None:
+    evidence["result_count"] = len(extract_items(data, keys))
+
+
+def extract_items(data: Any, keys: tuple[str, ...]) -> list[Any]:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+        value = data.get("data")
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def scalar(data: Any, *keys: str) -> Any:
+    if not isinstance(data, dict):
+        return None
+    for key in keys:
+        value = data.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def compact_user(user: Any) -> dict[str, Any]:
+    if not isinstance(user, dict):
+        return {}
+    return {key: user.get(key) for key in ("id", "login", "username", "full_name", "email") if user.get(key) is not None}
+
+
+def compact_run(run: Any) -> dict[str, Any]:
+    if not isinstance(run, dict):
+        return {}
+    return {
+        key: run.get(key)
+        for key in ("id", "name", "display_title", "status", "conclusion", "event", "head_branch", "head_sha", "run_number", "run_attempt", "created_at", "updated_at", "html_url")
+        if run.get(key) is not None
+    }
+
+
+def compact_job(job: Any) -> dict[str, Any]:
+    if not isinstance(job, dict):
+        return {}
+    return {
+        key: job.get(key)
+        for key in ("id", "name", "status", "conclusion", "started_at", "completed_at", "runner_name", "html_url")
+        if job.get(key) is not None
+    }
+
+
+def compact_artifact(artifact: Any) -> dict[str, Any]:
+    if not isinstance(artifact, dict):
+        return {}
+    return {
+        key: artifact.get(key)
+        for key in ("id", "name", "size_in_bytes", "expired", "created_at", "updated_at", "expires_at", "workflow_run")
+        if artifact.get(key) is not None
+    }
+
+
+def compact_file(file: Any) -> dict[str, Any]:
+    if not isinstance(file, dict):
+        return {}
+    return {
+        key: file.get(key)
+        for key in ("filename", "status", "additions", "deletions", "changes", "previous_filename")
+        if file.get(key) is not None
+    }
+
+
+def compact_ref(ref: Any) -> dict[str, Any]:
+    if not isinstance(ref, dict):
+        return {}
+    result = {key: ref.get(key) for key in ("ref", "label", "sha") if ref.get(key) is not None}
+    repo = ref.get("repo")
+    if isinstance(repo, dict):
+        result["repo"] = repo.get("full_name") or repo.get("name")
+    user = ref.get("user")
+    if isinstance(user, dict):
+        result["user"] = user.get("login") or user.get("username")
+    return result
+
+
+def compact_pr(pr: Any) -> dict[str, Any]:
+    if not isinstance(pr, dict):
+        return {}
+    return {
+        key: pr.get(key)
+        for key in ("id", "number", "index", "title", "state", "draft", "mergeable", "merged", "created_at", "updated_at", "html_url")
+        if pr.get(key) is not None
+    }
+
+
+def pr_head_sha(pr: Any) -> str | None:
+    if not isinstance(pr, dict):
+        return None
+    head = pr.get("head")
+    if isinstance(head, dict):
+        sha = head.get("sha")
+        if sha:
+            return str(sha)
+    sha = pr.get("head_sha")
+    return str(sha) if sha else None
+
+
+def is_failed_job(job: Any) -> bool:
+    conclusion = str(scalar(job, "conclusion") or "").lower()
+    status = str(scalar(job, "status") or "").lower()
+    return conclusion in _FAILED_CONCLUSIONS or status in _FAILED_STATUSES
+
+
+def is_failed_run(run: Any) -> bool:
+    conclusion = str(scalar(run, "conclusion") or "").lower()
+    status = str(scalar(run, "status") or "").lower()
+    return conclusion in _FAILED_CONCLUSIONS or status in _FAILED_STATUSES or status == "failure"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def validate_operation_specs() -> None:
+    for name, spec in OPERATION_SPECS.items():
+        missing = sorted(_REQUIRED_SPEC_FIELDS - set(spec))
+        if missing:
+            raise RuntimeError(f"operation spec {name} missing fields: {', '.join(missing)}")
+        if spec["writes_remote"] and not any(word in name for word in ("publish", "dispatch", "rerun", "delete", "merge")):
+            raise RuntimeError(f"remote write operation name must disclose side effect: {name}")
 
 
 def result_to_json(result: dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+validate_operation_specs()
 
 
 HANDLERS: dict[str, OperationHandler] = {
@@ -465,4 +1038,7 @@ HANDLERS: dict[str, OperationHandler] = {
     "actions.list_artifacts": list_artifacts,
     "actions.download_artifact": download_artifact,
     "actions.list_runners": list_runners,
+    "ci.prepare_failure_context": ci_prepare_failure_context,
+    "artifact.sync_for_run": artifact_sync_for_run,
+    "pr.preflight": pr_preflight,
 }

@@ -23,6 +23,7 @@ class GiteaClient:
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
         require_token: bool = True,
+        step: str | None = None,
     ) -> tuple[Any, dict[str, Any]]:
         response = await self._request(
             method,
@@ -31,7 +32,7 @@ class GiteaClient:
             json_body=json_body,
             require_token=require_token,
         )
-        evidence = self._evidence(method, path, response)
+        evidence = self._evidence(method, path, response, params=params, step=step)
         if not response.content:
             return None, evidence
         try:
@@ -50,6 +51,7 @@ class GiteaClient:
         *,
         params: dict[str, Any] | None = None,
         require_token: bool = True,
+        step: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         response = await self._request(
             method,
@@ -57,7 +59,7 @@ class GiteaClient:
             params=params,
             require_token=require_token,
         )
-        return response.text, self._evidence(method, path, response)
+        return response.text, self._evidence(method, path, response, params=params, step=step)
 
     async def download(
         self,
@@ -65,11 +67,12 @@ class GiteaClient:
         target_path: Path,
         *,
         params: dict[str, Any] | None = None,
+        step: str | None = None,
     ) -> dict[str, Any]:
         response = await self._request("GET", path, params=params, require_token=True)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(response.content)
-        evidence = self._evidence("GET", path, response)
+        evidence = self._evidence("GET", path, response, params=params, step=step)
         evidence["download_path"] = str(target_path)
         evidence["bytes"] = len(response.content)
         evidence["content_type"] = response.headers.get("content-type", "")
@@ -129,13 +132,22 @@ class GiteaClient:
                     "method": method,
                     "path": path,
                     "status_code": response.status_code,
-                    "body": response.text[:2000],
+                    "body_preview": response.text[:1000],
                 },
             )
         return response
 
-    def _evidence(self, method: str, path: str, response: httpx.Response) -> dict[str, Any]:
-        return {
+    def _evidence(
+        self,
+        method: str,
+        path: str,
+        response: httpx.Response,
+        *,
+        params: dict[str, Any] | None = None,
+        step: str | None = None,
+    ) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "step": step or path.strip("/") or "request",
             "provider": "gitea",
             "base_url": self.config.base_url,
             "method": method,
@@ -144,6 +156,23 @@ class GiteaClient:
             "x_total_count": response.headers.get("x-total-count"),
             "link": response.headers.get("link"),
         }
+        if params:
+            value["params_summary"] = summarize_params(params)
+        return value
+
+
+def summarize_params(params: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, value in params.items():
+        lowered = str(key).lower()
+        if "token" in lowered or "secret" in lowered or "password" in lowered:
+            safe[key] = "<redacted>"
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            text = str(value) if isinstance(value, str) else value
+            safe[key] = f"{text[:117]}..." if isinstance(text, str) and len(text) > 120 else text
+        else:
+            safe[key] = f"<{type(value).__name__}>"
+    return safe
 
 
 def repo_path(repo: str, suffix: str = "") -> str:
