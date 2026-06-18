@@ -62,6 +62,29 @@ cache.diagnose
 - 远端写 operation 均为 `writes_remote=true`、`risk_level=high`。
 - 远端写 operation 必须显式传 `confirm=true`。
 
+## 代码结构
+
+`localgpt_platform.operations` 已拆成 package，按职责分层：
+
+```text
+localgpt_platform/operations/
+  __init__.py
+  registry.py
+  schemas.py
+  actions.py
+  ci.py
+  workflow.py
+  pr.py
+  artifact.py
+  runner.py
+  cache.py
+```
+
+- `registry.py` 维护 operation metadata、handler registry、describe/execute 入口和 registry 校验。
+- `schemas.py` 维护 strict parser、compact serializer、参数校验和远端写 gate。
+- 业务模块只维护对应 category 的 handler。
+- smoke fake client 使用 route table + call recorder，精确断言 method/path/query/body。
+
 ## 已实现 Operation
 
 ### 状态与仓库
