@@ -7,14 +7,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .operations import describe_operations, execute_operation, result_to_json
+from .operations import check_status, describe_operations, execute_operation, result_to_json
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_stdout()
     parser = argparse.ArgumentParser(description="LocalGPT Gitea 平台工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("operations", help="列出可用 operation")
+    operations_parser = subparsers.add_parser("operations", help="列出可用 operation")
+    operations_parser.add_argument("--category")
+    operations_parser.add_argument("--operation")
+    operations_parser.add_argument("--detail", choices=["brief", "full"])
     subparsers.add_parser("status", help="检查 Gitea 服务器版本")
 
     execute_parser = subparsers.add_parser("execute", help="执行 operation")
@@ -25,10 +29,16 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "operations":
-        print(json.dumps(describe_operations(), ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                describe_operations(category=args.category, operation=args.operation, detail=args.detail),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
     if args.command == "status":
-        result = asyncio.run(execute_operation("server.version"))
+        result = asyncio.run(check_status())
         print(result_to_json(result))
         return 0 if result.get("ok") else 1
     if args.command == "execute":
@@ -43,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
         print(result_to_json(result))
         return 0 if result.get("ok") else 1
     raise AssertionError(args.command)
+
+
+def configure_stdout() -> None:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure:
+        reconfigure(encoding="utf-8")
 
 
 def load_request(args: argparse.Namespace) -> dict[str, Any]:

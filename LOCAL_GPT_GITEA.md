@@ -1,36 +1,59 @@
-**核心约束**
-- 顶层 MCP 工具保持 3 个：`gitea_status`、`gitea_describe_operations`、`gitea_execute`。
-- 不新增大量 `gitea_xxx` 顶层工具。
-- operation 分三类：原子读操作、组合读操作、显式写操作。
-- job log 和 artifact 不返回正文，固定落盘。
-- 本项目路径约束优先：使用 `{cwd}/jobs/<job_id>/...`，不要混回 `.gpt-artifacts/runs/...`，除非后续明确迁移。
+# LocalGPT Gitea MCP 设计契约
 
-**顶层工具设计**
-`gitea_status`
-- 检查 Gitea API 可达性、版本、认证状态。
-- 不做 repo 级查询。
-- 返回最小健康信息。
+## 1. 设计原则
 
-`gitea_describe_operations`
-- 支持渐进披露。
-- 参数建议：
-  - `category`：可选，`ci`、`actions`、`artifact`、`pr`、`workflow`、`runner`、`cache`
-  - `operation`：可选，传入时返回单个 operation 完整 schema
-  - `detail`：`brief` 或 `full`
-- `brief` 只返回名称、描述、读写属性。
-- `full` 返回完整参数 schema、返回结构、示例、风险等级。
+这个 MCP 是给 Codex 本地 workspace 使用的 Gitea 平台能力补充。
 
-`gitea_execute`
-- 唯一执行入口。
-- 输入：`operation`、`repo`、`params`。
-- 所有 operation 必须先在 registry 中声明 metadata。
-- 不允许执行 registry 外 operation。
+Codex 已经具备本地能力：
 
-**Operation Metadata 必须字段**
-每个 operation 都要声明：
+- 阅读、搜索、修改代码。
+- 运行 shell、测试、构建、lint。
+- 使用本地 `git` 做 status、diff、branch、commit、push。
+- 使用现有编辑工具做 patch 和文件写入。
+- 搜索 job log、查看 artifact 文件树、读取本地报告。
+
+所以 Gitea MCP 不重复这些能力。它只负责 Codex 本地拿不到或不应该靠猜的远端平台事实：
+
+- Gitea API 可达性和认证状态。
+- 仓库、PR、Actions workflow/run/job/runner 元数据。
+- CI job log 下载到本地文件。
+- Actions artifact 同步到本地文件。
+- 组合查询，把修 CI 所需的远端证据一次准备好。
+
+一句话：
+
+> Codex 负责读代码、改代码、跑测试、提交；Gitea MCP 负责查远端事实、下载日志和 artifact。
+
+## 2. 顶层工具
+
+顶层 MCP 工具保持少量稳定：
 
 ```text
-name
+gitea_status
+gitea_describe_operations
+gitea_execute
+```
+
+不要把每个 Gitea endpoint 拆成顶层 MCP tool。operation 通过 `gitea_execute` 扩展。
+
+`gitea_describe_operations` 负责渐进披露：
+
+- `detail=brief`：只返回 operation 名称、分类、描述、读写属性和风险等级。
+- `detail=full`：返回单个 operation 的完整参数 schema、返回结构和示例。
+- `category`：按 `ci`、`artifact`、`pr`、`workflow`、`runner`、`cache` 等分类过滤。
+- `operation`：查看单个 operation 的完整契约。
+
+## 3. Operation 契约
+
+每个 operation 必须在 registry 中声明 metadata。metadata 是参数 schema 的唯一事实来源，文档和 skill 不重复维护完整参数表。
+
+必需字段分两层。
+
+`name` 由 `OPERATION_SPECS` 的 registry key 提供，不在单个 spec object 内重复维护。`gitea_describe_operations` 输出 operation schema 时必须补出 `name`，且 `name` 必须等于 registry key。
+
+spec object 必需字段：
+
+```text
 category
 description
 repo_required
@@ -45,18 +68,16 @@ example
 risk_level
 ```
 
-关键布尔字段：
+关键语义字段：
 
 ```text
 read_only_remote
 writes_local_files
 writes_remote
+requires_cwd
 ```
 
-审查标准：任何写远端的 operation 必须 `writes_remote=true`，名字也必须显式体现副作用，例如 `publish`、`dispatch`、`rerun`、`delete`、`merge`。
-
-**统一返回结构**
-所有 operation 返回同一形态：
+所有 operation 返回统一结构：
 
 ```text
 ok
@@ -70,260 +91,182 @@ error
 ```
 
 成功时：
-- `ok=true`
-- `data` 放紧凑业务结果
-- `evidence` 放真实 API 调用证据
-- `warnings` 放非致命问题
-- `next_suggested_operations` 给 GPT-5.5 下一步候选，不替它决策
+
+- `data` 放紧凑结果和本地路径。
+- `evidence` 放真实 Gitea API 调用证据。
+- `warnings` 放非致命问题。
+- `next_suggested_operations` 给 Codex 下一步候选，不替 Codex 做最终判断。
 
 失败时：
+
 - `ok=false`
 - `error.code`
 - `error.message`
 - `error.details`
-- 不抛大段 traceback 给模型
 
-**Evidence 结构**
-组合 operation 内部每次 API 调用都必须有 evidence entry：
+不要把 traceback、大日志、完整 artifact 内容塞进返回值。
+
+## 4. Evidence 契约
+
+每次 Gitea API 调用都应有 evidence。
+
+建议字段：
 
 ```text
 step
+provider
+base_url
 method
 path
 status_code
 params_summary
+result_count
 download_path
 bytes
-```
-
-注意：
-- 不记录 token。
-- 不记录 secret。
-- 不记录完整 response body。
-- 对分页调用要记录 page/limit 和结果数量。
-
-**本地文件落盘规范**
-当前项目统一使用：
-
-```text
-{cwd}/jobs/<job_id>/job.log
-{cwd}/jobs/<job_id>/artifact/
-{cwd}/jobs/<job_id>/artifact/<artifact_name>.zip
-{cwd}/jobs/<job_id>/artifact/manifest.json
-```
-
-规则：
-- `cwd` 必须由调用方显式传入。
-- `cwd` 必须是已存在目录。
-- 所有写入路径必须 `relative_to(cwd)`。
-- 禁止 `target_dir`。
-- 禁止任意绝对输出路径。
-- zip 解压必须防 zip-slip。
-
-**第一批原子 Operation**
-保留这些原子能力：
-
-```text
-server.version
-auth.whoami
-repo.get
-
-actions.list_workflows
-actions.get_workflow
-actions.list_runs
-actions.get_run
-actions.list_run_jobs
-actions.get_job
-actions.download_job_log
-actions.list_artifacts
-actions.download_artifact
-actions.list_runners
-```
-
-注意语义：
-- `actions.download_job_log`，不是 `get_job_log`。
-- 因为它有本地写文件副作用。
-- metadata 应该是：
-  - `read_only_remote=true`
-  - `writes_local_files=true`
-  - `writes_remote=false`
-
-**第一批组合 Operation**
-优先做这三个：
-
-1. `ci.prepare_failure_context`
-2. `artifact.sync_for_run`
-3. `pr.preflight`
-
-`ci.prepare_failure_context`
-- 输入：
-  - `repo`
-  - `cwd`
-  - `run_id`，或 `branch/head_sha/status`
-- 内部：
-  - 定位 run
-  - 获取 run summary
-  - list jobs
-  - 找 failed/cancelled/timed_out jobs
-  - 下载失败 job log 到 `{cwd}/jobs/<job_id>/job.log`
-  - 可选列出 artifacts
-- 返回：
-  - run summary
-  - failed jobs
-  - log paths
-  - artifact candidates
-  - evidence[]
-  - next_suggested_operations
-- 不做：
-  - 不 rerun
-  - 不评论 PR
-  - 不判断根因
-  - 不返回完整日志
-
-`artifact.sync_for_run`
-- 输入：
-  - `repo`
-  - `cwd`
-  - `run_id`
-  - 可选 artifact name pattern
-- 内部：
-  - list artifacts
-  - 下载选中的 artifacts
-  - 解压到 job 或 run 关联目录
-  - 写 manifest
-- 返回：
-  - manifest path
-  - artifact dirs
-  - zip paths
-  - file count
-  - evidence[]
-- 注意：如果 artifact 无法映射到 job，可放到 `{cwd}/jobs/run-<run_id>/artifact/`，但必须在 schema 中明确。
-
-`pr.preflight`
-- 输入：
-  - `repo`
-  - `pr_number`
-- 内部：
-  - 获取 PR metadata
-  - 获取 base/head/head_sha
-  - 获取 changed files summary
-  - 查询 head_sha 相关 CI runs
-- 返回：
-  - PR state
-  - base/head/head_sha
-  - changed files summary
-  - ci summary
-  - evidence[]
-- 不做：
-  - 不 checkout
-  - 不 fetch
-  - 不 merge
-  - 不评论
-
-**第二批写 Operation**
-后续再做：
-
-```text
-pr.publish
-workflow.dispatch_and_track
-workflow.rerun_run
-workflow.rerun_job
-cache.plan_delete
-cache.delete
+link
+x_total_count
 ```
 
 要求：
-- 写操作必须 `writes_remote=true`。
-- operation 名字必须显式。
-- 不允许藏在读组合里。
-- skill 里必须要求 GPT-5.5 在执行前确认意图或说明副作用。
-- Codex MCP 配置层面可把写 operation 所在 tool 设为 `prompt/approve`，但由于目前是单 execute 入口，需要在 operation metadata 和 skill 层明确风险。
 
-**Skill 结构**
-不要把所有内容放进一个 `SKILL.md`。建议：
+- 不记录 token、secret、password、registration token。
+- 不记录完整大 body。
+- 列表 operation 应记录 `result_count`。
+- 组合 operation 内部每个 API 调用都应追加 evidence。
+
+## 5. 本地落盘规范
+
+`cwd` 由调用方显式传入，必须是已存在的 Codex workspace 目录。
+
+job log：
 
 ```text
-localgpt-platform/
+{cwd}/jobs/<job_id>/job.log
+```
+
+artifact：
+
+```text
+{cwd}/jobs/<job_id>/artifact/
+{cwd}/jobs/<job_id>/artifact/manifest.json
+```
+
+run 级 artifact 默认使用伪 job：
+
+```text
+{cwd}/jobs/run-<run_id>/artifact/
+{cwd}/jobs/run-<run_id>/artifact/manifest.json
+```
+
+规则：
+
+- 本地写入必须在 `cwd` 内。
+- 不接受 `target_dir` 这类任意输出目录。
+- job log 不直接返回正文。
+- artifact 内容不直接返回正文。
+- Codex 后续用 shell 搜日志、列文件树、读取报告。
+
+## 6. Artifact Zip 策略
+
+Gitea artifact API 的传输格式是 zip，但 zip 不是对外产物。
+
+契约：
+
+- operation 不暴露 `extract` 参数。
+- zip 是临时传输文件，成功解压后必须删除。
+- 返回值不包含 `zip_path`、`transport_zip_path`、`retained_zip_paths`。
+- manifest 必须记录 artifact id、name、extract_dir、file_count、evidence。
+- 解压必须防路径穿越。
+
+当前实现状态见 [LOCAL_GPT_GITEA_STATUS.md](D:/repos/CodexPlusPlus/LOCAL_GPT_GITEA_STATUS.md)。
+
+## 7. 开发期严格模式
+
+开发期必须快速暴露 schema、parser、registry 问题，不做“聪明兜底”。
+
+契约：
+
+- 未知 operation 必须失败。
+- 未知 category 必须失败。
+- 未声明 params 必须失败为 `unknown_param`。
+- response shape 不匹配必须失败为 `unexpected_response_shape`。
+- registry 与 handler 必须双向一致。
+- operation metadata 缺字段必须 import-time fail。
+- 不把 malformed response 当空列表。
+
+这不是限制 GPT-5.5，而是调试质量要求。Codex 需要明确知道问题是“参数传错”、“环境没配”还是“Gitea 响应 shape 和 parser 不匹配”。
+
+## 8. 远端写 Operation 接口契约
+
+远端写 operation 是会修改 Gitea 远端状态的 operation，例如 publish、dispatch、rerun、delete、merge、comment。
+
+契约：
+
+- `writes_remote=true`。
+- `risk_level=high`。
+- 名称包含明确副作用动词，例如 `publish`、`dispatch`、`rerun`、`delete`、`merge`、`comment`。
+- 参数应包含必要的 `expected_*`，避免 Codex 使用陈旧上下文修改新状态。
+- 所有远端写 operation 必须显式传 JSON boolean `confirm=true`；字符串、数字或其他 truthy 值不接受。
+- `evidence` 不记录 secret、完整大 body、token、registration token。
+- 失败不自动重试。
+- 组合读 operation 禁止调用远端写 operation。
+
+这些是远端副作用的接口契约，不是企业审批系统。
+
+## 9. Skill 分层
+
+skill 使用渐进式披露：
+
+```text
+templates/skills/localgpt-platform/
   SKILL.md
   references/
     ci-failure.md
     artifact-analysis.md
     pr-workflow.md
-    workflow-rerun.md
-    runner-diagnose.md
-    cache-ops.md
-    write-ops.md
-  examples/
-    ci-prepare-failure-context.json
-    artifact-sync-for-run.json
-    pr-preflight.json
-    pr-publish.json
+    workflow-write-ops.md
+    runner-cache.md
 ```
 
 `SKILL.md` 只放：
-- 何时使用 MCP
-- 何时不用 MCP
-- 最常用 CI 修复流程
-- 固定路径规范
-- 大日志处理原则
-- 指向 references
 
-`references/ci-failure.md`
-- 写完整 CI runbook：
-  - `ci.find_runs`
-  - `ci.prepare_failure_context`
-  - 本地 grep/tail 日志
-  - 修复代码
-  - 本地验证
-  - 再查 CI
+- 何时使用 MCP。
+- 何时不用 MCP。
+- 最常用 CI 修复流程。
+- 固定路径规范。
+- 大日志和 artifact 的上下文成本规则。
+- 指向 references。
 
-`references/write-ops.md`
-- 专门写副作用 operation 规则。
-- 所有 `writes_remote=true` 的操作都集中说明。
+复杂 runbook 放 references，不在 `SKILL.md` 堆叠。
 
-**大日志处理框架**
-第一阶段不需要做 `log.search` MCP operation，让 GPT-5.5 用 shell 读本地文件片段即可。
+## 10. 不进入 MCP 的能力
 
-skill 中明确：
-- 先 `download_job_log`
-- 再用 shell 搜索：
-  - error
-  - failed
-  - panic
-  - traceback
-  - exception
-- 只读取上下文片段或 tail
-- 不要整份日志塞进上下文
-
-后续如果需要统一体验，再加：
+这些交给 Codex 本地能力，不做 MCP operation：
 
 ```text
-log.extract_error_blocks
+workspace prepare
+workspace exec
+workspace diff
+workspace patch
+workspace write file
+workspace reset
+create local branch
+git status / diff / log / show / commit / push
+运行测试 / 构建 / lint
+搜索日志文件
+读取 artifact 内文件
+解析本地测试报告
+artifact.index_local
 ```
 
-但它仍然只读本地文件，不再调用 Gitea。
+`artifact.index_local` 不进 Gitea MCP。Codex 已经能用 shell 查看 artifact 文件树；如果未来确实需要便利脚本，应放到 skill 的本地 `scripts/`，不是远端平台 MCP。
 
-**审查重点**
-我后续审查时会卡这些点：
+## 11. 状态文档
 
-1. `actions.get_job_log` 必须不存在，只能有 `actions.download_job_log`。
-2. job log 不允许返回原始正文。
-3. artifact 不允许传 `target_dir`。
-4. 所有本地写入必须在 `cwd` 内。
-5. 组合 operation 必须返回 `evidence[]`，不能只返回总结。
-6. 读组合不能顺手执行写远端操作。
-7. 写 operation 必须有 `writes_remote=true`。
-8. `describe_operations` 不能一次性返回过大的完整 schema；要支持 `brief/full` 或按 operation inspect。
-9. skill 必须是渐进披露，不要把所有 runbook 堆进 `SKILL.md`。
-10. 返回结构必须稳定，错误必须结构化。
+当前已实现 operation、待实现 operation 和后续优先级记录在：
 
-**推荐实施顺序**
-1. 先整理 operation registry metadata。
-2. 改造 `describe_operations` 支持 `category/detail/operation`。
-3. 实现 `ci.prepare_failure_context`。
-4. 实现 `artifact.sync_for_run`。
-5. 实现 `pr.preflight`。
-6. 拆 skill references。
-7. 再考虑写操作：`pr.publish`、`workflow.rerun`。
+```text
+LOCAL_GPT_GITEA_STATUS.md
+```
 
-最终目标就是：MCP 负责收集证据和落盘大文件，skill 负责流程，GPT-5.5 负责判断和修复。
+这份设计契约不作为当前实现状态的唯一来源。实现变更时，只需要同步状态文档和 operation registry。

@@ -1,55 +1,35 @@
-name: LocalGPT compile
+name: Windows artifacts
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/localgpt-compile.yml"
-      - "scripts/ci_windows_target_cache.py"
+      - ".github/workflows/windows-artifacts.yml"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
       - "build/CodexPlusPlus-localgpt/Cargo.lock"
+      - "build/CodexPlusPlus-localgpt/assets/**"
+      - "build/CodexPlusPlus-localgpt/apps/codex-plus-launcher/**"
+      - "build/CodexPlusPlus-localgpt/apps/codex-plus-manager/**"
       - "build/CodexPlusPlus-localgpt/crates/codex-plus-core/**"
+      - "build/CodexPlusPlus-localgpt/crates/codex-plus-data/**"
   push:
     branches: [main]
     paths:
-      - ".github/workflows/localgpt-compile.yml"
-      - "scripts/ci_windows_target_cache.py"
+      - ".github/workflows/windows-artifacts.yml"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
       - "build/CodexPlusPlus-localgpt/Cargo.lock"
+      - "build/CodexPlusPlus-localgpt/assets/**"
+      - "build/CodexPlusPlus-localgpt/apps/codex-plus-launcher/**"
+      - "build/CodexPlusPlus-localgpt/apps/codex-plus-manager/**"
       - "build/CodexPlusPlus-localgpt/crates/codex-plus-core/**"
+      - "build/CodexPlusPlus-localgpt/crates/codex-plus-data/**"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  localgpt-crate:
-    name: localgpt crate
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Check localgpt crate
-        run: cargo check --manifest-path localgpt/Cargo.toml --all-targets
-
-  codex-plus-core-integration:
-    name: codex-plus-core integration
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Check codex-plus-core with LocalGPT path dependency
-        run: cargo check --manifest-path build/CodexPlusPlus-localgpt/Cargo.toml -p codex-plus-core --all-targets
-
   windows-artifacts:
     name: Windows artifacts
     runs-on: windows-latest
