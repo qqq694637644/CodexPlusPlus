@@ -2,7 +2,23 @@
 
 Use this reference when a task asks for Gitea Actions run/job status, failed CI context, or job logs.
 
-## Preferred operation
+## Quick run summary
+
+Use `ci.get_run_summary` when you have a `run_id` and only need a compact run + jobs snapshot. It does not download logs or write local files.
+
+```json
+{
+  "operation": "ci.get_run_summary",
+  "repo": "owner/repo",
+  "params": {
+    "run_id": 123
+  }
+}
+```
+
+If it reports failed jobs, use `ci.prepare_failure_context` next with a real `cwd` to download failed job logs.
+
+## Preferred failure-context operation
 
 Use `ci.prepare_failure_context` first when the goal is to understand a failed run.
 
