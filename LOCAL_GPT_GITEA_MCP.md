@@ -21,6 +21,12 @@
 
 ## Codex MCP 配置
 
+先安装依赖：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
 ```powershell
 cd D:\repos\CodexPlusPlus
 codex mcp add localgpt-gitea --env GITEA_BASE_URL=https://gitea.example.com --env GITEA_TOKEN=<token> -- python -m localgpt_platform.mcp_server
@@ -33,7 +39,7 @@ codex mcp add localgpt-gitea --env GITEA_BASE_URL=https://gitea.example.com --en
 command = "python"
 args = ["-m", "localgpt_platform.mcp_server"]
 cwd = "D:\\repos\\CodexPlusPlus"
-env_vars = ["GITEA_BASE_URL", "GITEA_TOKEN"]
+env_vars = ["GITEA_BASE_URL", "GITEA_TOKEN", "ARTIFACT_ROOT"]
 tool_timeout_sec = 60
 ```
 
@@ -45,6 +51,9 @@ tool_timeout_sec = 60
 | `GITEA_TOKEN` | 大多数操作需要 | Gitea API token |
 | `GITEA_TIMEOUT` | 否 | 请求超时秒数，默认 `30` |
 | `GITEA_VERIFY_SSL` | 否 | 是否校验证书，默认 `true` |
+| `ARTIFACT_ROOT` | 否 | artifact 固定下载根目录，默认当前工作目录下 `.gpt-artifacts` |
+
+`actions.download_artifact` 不接受任意下载目录参数。所有 zip 和解压文件都必须落在 `ARTIFACT_ROOT` 内，路径越界会直接失败。
 
 ## MCP 工具
 
@@ -53,6 +62,13 @@ tool_timeout_sec = 60
 | `gitea_status` | 检查 Gitea 服务器版本 |
 | `gitea_describe_operations` | 列出当前启用 operation |
 | `gitea_execute` | 执行白名单 operation |
+
+`gitea_describe_operations` 会返回每个 operation 的：
+
+- `repo_required`
+- `required_params`
+- `optional_params`
+- `example`
 
 ## 返回结构
 

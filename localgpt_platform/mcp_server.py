@@ -9,7 +9,7 @@ from .operations import describe_operations, execute_operation
 INSTRUCTIONS = """
 LocalGPT Gitea MCP 只调用 Gitea 官方 /api/v1 REST API，用于 Codex 查询 CI/CD、PR 前置状态和 artifact。不要用它执行本地 git、测试、构建或 shell。所有工具返回结构化 JSON：ok 为 true 时读取 data/evidence；ok 为 false 时先处理 error，不要编造结果。不要输出 token、secret 或 runner registration token。
 
-优先使用 gitea_describe_operations 查看 operation 白名单，再调用 gitea_execute。第一版只启用只读 CI 诊断能力；重跑 workflow、修改 secret、删除 runner 等写操作尚未启用。artifact 默认下载到当前工作目录的 .gpt-artifacts/ 下。
+优先使用 gitea_describe_operations 查看 operation 白名单和参数 schema，再调用 gitea_execute。第一版只启用只读 CI 诊断能力；重跑 workflow、修改 secret、删除 runner 等写操作尚未启用。artifact 只能下载到 ARTIFACT_ROOT 配置的固定根目录下。
 """.strip()
 
 mcp = FastMCP("localgpt-gitea", instructions=INSTRUCTIONS)
