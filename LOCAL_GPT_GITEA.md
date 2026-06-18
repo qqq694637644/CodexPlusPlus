@@ -224,6 +224,8 @@ templates/skills/localgpt-platform/
     ci-failure.md
     artifact-analysis.md
     pr-workflow.md
+    workflow-write-ops.md
+    runner-cache.md
 ```
 
 `SKILL.md` 只放：

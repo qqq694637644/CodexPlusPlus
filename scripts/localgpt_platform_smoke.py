@@ -16,12 +16,21 @@ from localgpt_platform.operations import (
     HANDLERS,
     OPERATION_SPECS,
     artifact_sync_for_run,
+    cache_diagnose,
+    ci_find_run_candidates,
     ci_get_run_summary,
     ci_prepare_failure_context,
     describe_operations,
     download_artifact,
     execute_operation,
+    pr_comment,
+    pr_merge,
+    pr_publish,
     pr_preflight,
+    runner_diagnose_queue,
+    workflow_dispatch_and_track,
+    workflow_rerun_job,
+    workflow_rerun_run,
 )
 import localgpt_platform.operations as operations_module
 from localgpt_platform.result import PlatformError
@@ -42,7 +51,19 @@ class FakeGiteaClient:
         step: str | None = None,
     ) -> tuple[Any, dict[str, Any]]:
         evidence = {"step": step or path, "method": method, "path": path, "status_code": 200, "params_summary": params or {}}
+        if path.endswith("/actions/workflows/ci.yml/runs"):
+            return {"workflow_runs": [{"id": 11, "status": "queued", "head_branch": "main", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}, evidence
+        if path.endswith("/actions/workflows/ci.yml/dispatches"):
+            return {"run_id": 11}, evidence
         if path.endswith("/pulls/7"):
+            if method == "PATCH":
+                return {
+                    "number": 7,
+                    "state": "open",
+                    "title": (json_body or {}).get("title", "Updated"),
+                    "head": {"sha": "abc", "ref": "gpt/x"},
+                    "base": {"sha": "def", "ref": "main"},
+                }, evidence
             return {
                 "number": 7,
                 "state": "open",
@@ -54,12 +75,26 @@ class FakeGiteaClient:
             if self.broken == "pr_files":
                 return {"broken_files": []}, evidence
             return [{"filename": "a.py", "status": "modified", "additions": 1, "deletions": 0, "changes": 1}], evidence
+        if path.endswith("/pulls"):
+            return {
+                "number": 8,
+                "state": "open",
+                "title": (json_body or {}).get("title", "Created"),
+                "head": {"sha": "abc", "ref": (json_body or {}).get("head", "gpt/x")},
+                "base": {"sha": "def", "ref": (json_body or {}).get("base", "main")},
+            }, evidence
+        if path.endswith("/issues/7/comments"):
+            return {"id": 900, "html_url": "https://gitea.example/comment/900", "created_at": "2026-01-01T00:00:00Z"}, evidence
+        if path.endswith("/pulls/7/merge"):
+            return {"merged": True}, evidence
         if path.endswith("/actions/runs"):
             if self.broken == "runs":
                 return {"broken_runs": []}, evidence
-            return {"workflow_runs": [{"id": 10, "status": "failure", "conclusion": "failure", "head_sha": "abc"}]}, evidence
+            return {"workflow_runs": [{"id": 10, "status": "failure", "conclusion": "failure", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}, evidence
         if path.endswith("/actions/runs/10"):
             return {"id": 10, "status": "failure", "conclusion": "failure", "head_sha": "abc"}, evidence
+        if path.endswith("/actions/runs/10/rerun"):
+            return {"rerun": "run"}, evidence
         if path.endswith("/actions/runs/10/jobs"):
             if self.broken == "jobs":
                 return {"broken_jobs": [{"id": 99}]}, evidence
@@ -70,10 +105,16 @@ class FakeGiteaClient:
                     {"id": 101, "name": "build", "status": "in_progress", "conclusion": None},
                 ]
             }, evidence
+        if path.endswith("/actions/jobs/99"):
+            return {"id": 99, "run_id": 10, "name": "test", "status": "failure", "conclusion": "failure"}, evidence
+        if path.endswith("/actions/jobs/99/rerun"):
+            return {"rerun": "job"}, evidence
         if path.endswith("/actions/runs/10/artifacts"):
             if self.broken == "artifacts":
                 return {"broken_artifacts": []}, evidence
             return {"artifacts": [{"id": 123, "name": "test-results", "size_in_bytes": 3}]}, evidence
+        if path.endswith("/actions/runners"):
+            return {"runners": [{"id": 1, "name": "runner-1", "status": "online", "busy": False, "disabled": False, "labels": ["windows-latest"]}]}, evidence
         raise AssertionError(path)
 
     async def request_text(
@@ -178,6 +219,12 @@ async def main() -> None:
     summary_typo = await execute_operation("ci.get_run_summary", repo="owner/repo", params={"runid": 10})
     assert summary_typo["ok"] is False
     assert summary_typo["error"]["code"] == "unknown_param", summary_typo
+    write_without_confirm = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"job_id": 99})
+    assert write_without_confirm["ok"] is False
+    assert write_without_confirm["error"]["code"] == "missing_param", write_without_confirm
+    write_confirm_false = await execute_operation("workflow.rerun_job", repo="owner/repo", params={"job_id": 99, "confirm": False})
+    assert write_confirm_false["ok"] is False
+    assert write_confirm_false["error"]["code"] == "confirmation_required", write_confirm_false
     missing = await execute_operation("ci.prepare_failure_context", repo="owner/repo", params={})
     assert missing["ok"] is False
     assert missing["error"]["code"] == "missing_param", missing
@@ -195,6 +242,10 @@ async def main() -> None:
         operations_module.GiteaClient = original_client  # type: ignore[assignment]
 
     client = FakeGiteaClient()
+    candidates = await ci_find_run_candidates(client, "owner/repo", {"head_sha": "abc"})
+    assert candidates["ok"] is True
+    assert candidates["data"]["candidate_count"] == 1
+    assert candidates["next_suggested_operations"] == ["ci.get_run_summary"]
     summary = await ci_get_run_summary(client, "owner/repo", {"run_id": 10})
     assert summary["ok"] is True
     assert summary["operation"] == "ci.get_run_summary"
@@ -206,6 +257,40 @@ async def main() -> None:
     assert summary["data"]["conclusion_counts"] == {"<missing>": 2, "failure": 1}
     assert summary["data"]["content_returned"] is False
     assert summary["next_suggested_operations"] == ["ci.prepare_failure_context"]
+    queue = await runner_diagnose_queue(client, "owner/repo", {"limit": 10})
+    assert queue["ok"] is True
+    assert queue["data"]["runner_summary"]["runner_count"] == 1
+    assert queue["data"]["queued_run_count"] == 1
+    cache = await cache_diagnose(client, "owner/repo", {"limit": 10})
+    assert cache["ok"] is True
+    assert cache["data"]["official_cache_management_api"] is False
+
+    rerun_job = await workflow_rerun_job(client, "owner/repo", {"job_id": 99, "expected_status": "failure", "expected_conclusion": "failure", "expected_run_id": 10, "confirm": True})
+    assert rerun_job["ok"] is True
+    assert rerun_job["data"]["rerun_response"] == {"rerun": "job"}
+    rerun_run = await workflow_rerun_run(client, "owner/repo", {"run_id": 10, "expected_head_sha": "abc", "expected_status": "failure", "confirm": True})
+    assert rerun_run["ok"] is True
+    assert rerun_run["data"]["rerun_response"] == {"rerun": "run"}
+    dispatch = await workflow_dispatch_and_track(client, "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
+    assert dispatch["ok"] is True
+    assert dispatch["data"]["dispatch_response_run_id"] == "11"
+
+    published = await pr_publish(client, "owner/repo", {"mode": "create", "head": "gpt/x", "base": "main", "title": "Created", "expected_head_sha": "abc", "confirm": True})
+    assert published["ok"] is True
+    assert published["data"]["created_or_updated"] == "created"
+    updated = await pr_publish(client, "owner/repo", {"mode": "update", "existing_pr_number": 7, "title": "Updated", "expected_head_sha": "abc", "confirm": True})
+    assert updated["ok"] is True
+    assert updated["data"]["created_or_updated"] == "updated"
+    comment = await pr_comment(client, "owner/repo", {"pr_number": 7, "body": "hello", "confirm": True})
+    assert comment["ok"] is True
+    assert comment["data"]["body_length"] == 5
+    merge_blocked = await execute_operation("pr.merge", repo="owner/repo", params={"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True})
+    assert merge_blocked["ok"] is False
+    assert merge_blocked["error"]["code"] == "missing_base_url", merge_blocked
+    merge = await pr_merge(client, "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True, "require_ci_success": False})
+    assert merge["ok"] is True
+    assert merge["data"]["merge_response"] == {"merged": True}
+
     pr = await pr_preflight(client, "owner/repo", {"pr_number": 7})
     assert pr["ok"] is True
     assert pr["data"]["head_sha"] == "abc"
