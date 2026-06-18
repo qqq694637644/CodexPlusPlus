@@ -398,12 +398,12 @@ async def main() -> None:
     merge_success_client = FakeGiteaClient(broken="merge_ci_success")
     merge_success = await pr_merge(merge_success_client, "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True})
     assert merge_success["ok"] is True
-    merge_success_client.assert_called("POST", "/repos/owner/repo/pulls/7/merge", params={}, json_body={"do": "merge"})
+    merge_success_client.assert_called("POST", "/repos/owner/repo/pulls/7/merge", params={}, json_body={"do": "merge", "head_commit_id": "abc"})
     merge_success_client.assert_no_json_keys("Do", "MergeTitleField", "MergeMessageField")
     merge = await pr_merge(client, "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True, "require_ci_success": False})
     assert merge["ok"] is True
     assert merge["data"]["merge_response"] == {"merged": True}
-    client.assert_called("POST", "/repos/owner/repo/pulls/7/merge", params={}, json_body={"do": "merge"})
+    client.assert_called("POST", "/repos/owner/repo/pulls/7/merge", params={}, json_body={"do": "merge", "head_commit_id": "abc"})
     client.assert_no_json_keys("Do", "MergeTitleField", "MergeMessageField")
 
     pr = await pr_preflight(client, "owner/repo", {"pr_number": 7})

@@ -252,7 +252,7 @@ pr.merge
 - `pr.preflight`：读取 PR metadata、base/head/head_sha、changed files、head_sha CI runs。
 - `pr.publish`：创建或更新 PR；开发阶段只支持 `mode=create|update`，不做宽泛 upsert。
 - `pr.comment`：给 PR 对应 issue 追加评论；返回 body 长度和 hash，不返回完整正文。
-- `pr.merge`：合并 PR；强制 `expected_head_sha`、`base_branch`、`merge_method`、`confirm=true`，默认 `require_ci_success=true`，且要求 head_sha 相关 CI 全部完成并为 success。
+- `pr.merge`：合并 PR；强制 `expected_head_sha`、`base_branch`、`merge_method`、`confirm=true`，默认 `require_ci_success=true`，且要求 head_sha 相关 CI 全部完成并为 success；POST merge 时把 `expected_head_sha` 作为官方 `head_commit_id` 发送给 Gitea，避免 GET 校验后 head 变化的竞态。
 
 不做：
 
