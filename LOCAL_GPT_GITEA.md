@@ -165,14 +165,14 @@ run 级 artifact 默认使用伪 job：
 
 ## 6. Artifact Zip 策略
 
-Gitea artifact API 的传输格式是 zip，但 zip 不是默认对外产物。
+Gitea artifact API 的传输格式是 zip，但 zip 不是对外产物。
 
 契约：
 
-- 默认 `extract=true`。
-- `extract=true`：zip 是临时传输文件，成功解压后删除。
-- `extract=false`：允许保留 zip，返回 `data.zip_path`。
-- manifest 必须记录 artifact id、name、extract_dir、file_count、transport_zip_bytes、evidence。
+- operation 不暴露 `extract` 参数。
+- zip 是临时传输文件，成功解压后必须删除。
+- 返回值不包含 `zip_path`、`transport_zip_path`、`retained_zip_paths`。
+- manifest 必须记录 artifact id、name、extract_dir、file_count、evidence。
 - 解压必须防路径穿越。
 
 当前实现状态见 [LOCAL_GPT_GITEA_STATUS.md](D:/repos/CodexPlusPlus/LOCAL_GPT_GITEA_STATUS.md)。
