@@ -43,6 +43,7 @@ The zip returned by the Gitea artifact API is a transport file. With the default
 
 - `cwd` must be an existing directory.
 - `target_dir` is forbidden.
+- Artifact zip is only a transport format; successful sync leaves extracted files and manifest, not a zip artifact.
 - Zip extraction rejects zip-slip paths.
 - Successful default extraction does not leave zip files as user-facing artifacts.
 - Artifact content is never returned in the MCP response.
