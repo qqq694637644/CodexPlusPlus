@@ -157,11 +157,11 @@ async def pr_merge(client: GiteaClient, repo: str | None, params: dict[str, Any]
         runs_evidence["result_count"] = len(runs)
         evidence.append(runs_evidence)
         ensure_ci_success_for_merge(runs, expected_run_ids=parse_expected_id_set(params.get("expected_run_ids")))
-    merge_body: dict[str, Any] = {"Do": merge_method}
+    merge_body: dict[str, Any] = {"do": merge_method}
     if params.get("merge_title") is not None:
-        merge_body["MergeTitleField"] = str(params["merge_title"])
+        merge_body["merge_title_field"] = str(params["merge_title"])
     if params.get("merge_message") is not None:
-        merge_body["MergeMessageField"] = str(params["merge_message"])
+        merge_body["merge_message_field"] = str(params["merge_message"])
     if params.get("delete_branch_after_merge") is not None:
         merge_body["delete_branch_after_merge"] = bool_param(params, "delete_branch_after_merge", False)
     merge_path = repo_path(repo, f"/pulls/{path_segment(pr_number)}/merge")

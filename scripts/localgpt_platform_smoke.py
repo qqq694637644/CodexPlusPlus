@@ -140,6 +140,13 @@ class FakeGiteaClient:
             if call["method"] == method and call["path"] == path:
                 raise AssertionError({"unexpected_call": call, "calls": self.calls})
 
+    def assert_no_json_keys(self, *keys: str) -> None:
+        forbidden = set(keys)
+        for call in self.calls:
+            found = forbidden.intersection(call["json_body"])
+            if found:
+                raise AssertionError({"forbidden_keys": sorted(found), "call": call, "calls": self.calls})
+
     def _workflow_runs(self, params: dict[str, Any], json_body: dict[str, Any]) -> Any:
         return {"workflow_runs": [{"id": 11, "status": "queued", "head_branch": "main", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}
 
@@ -388,11 +395,16 @@ async def main() -> None:
         assert exc.code == "ci_not_complete", exc.to_dict()
     else:
         raise AssertionError("expected pr.merge to reject in-progress CI")
-    merge_success = await pr_merge(FakeGiteaClient(broken="merge_ci_success"), "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True})
+    merge_success_client = FakeGiteaClient(broken="merge_ci_success")
+    merge_success = await pr_merge(merge_success_client, "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True})
     assert merge_success["ok"] is True
+    merge_success_client.assert_called("POST", "/repos/owner/repo/pulls/7/merge", params={}, json_body={"do": "merge"})
+    merge_success_client.assert_no_json_keys("Do", "MergeTitleField", "MergeMessageField")
     merge = await pr_merge(client, "owner/repo", {"pr_number": 7, "expected_head_sha": "abc", "base_branch": "main", "merge_method": "merge", "confirm": True, "require_ci_success": False})
     assert merge["ok"] is True
     assert merge["data"]["merge_response"] == {"merged": True}
+    client.assert_called("POST", "/repos/owner/repo/pulls/7/merge", params={}, json_body={"do": "merge"})
+    client.assert_no_json_keys("Do", "MergeTitleField", "MergeMessageField")
 
     pr = await pr_preflight(client, "owner/repo", {"pr_number": 7})
     assert pr["ok"] is True
