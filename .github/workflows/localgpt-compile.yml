@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - ".github/workflows/localgpt-compile.yml"
+      - "requirements.txt"
+      - "localgpt_platform/**"
+      - "templates/skills/**"
+      - "scripts/localgpt_platform_smoke.py"
       - "scripts/ci_windows_target_cache.py"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
@@ -13,6 +17,10 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/localgpt-compile.yml"
+      - "requirements.txt"
+      - "localgpt_platform/**"
+      - "templates/skills/**"
+      - "scripts/localgpt_platform_smoke.py"
       - "scripts/ci_windows_target_cache.py"
       - "localgpt/**"
       - "build/CodexPlusPlus-localgpt/Cargo.toml"
@@ -24,6 +32,36 @@ permissions:
   contents: read
 
 jobs:
+  localgpt-platform:
+    name: localgpt platform smoke
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile Python modules
+        run: python -m compileall -q localgpt_platform
+
+      - name: Check operation describe CLI
+        run: |
+          python -m localgpt_platform.cli operations --category artifact --detail brief
+          python -m localgpt_platform.cli operations --operation ci.prepare_failure_context --detail full
+
+      - name: Import MCP server
+        run: python -c "import localgpt_platform.mcp_server"
+
+      - name: Run LocalGPT platform smoke tests
+        run: python scripts/localgpt_platform_smoke.py
+
   localgpt-crate:
     name: localgpt crate
     runs-on: windows-latest
