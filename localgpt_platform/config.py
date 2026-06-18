@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 from .result import PlatformError
 
@@ -13,7 +12,6 @@ class GiteaConfig:
     token: str | None
     timeout: float
     verify_ssl: bool
-    artifact_root: Path
 
     @property
     def api_base_url(self) -> str:
@@ -61,18 +59,9 @@ def load_gitea_config(*, require_token: bool = True) -> GiteaConfig:
 
     verify_raw = os.environ.get("GITEA_VERIFY_SSL", "true").strip().lower()
     verify_ssl = verify_raw not in {"0", "false", "no"}
-    artifact_root_raw = os.environ.get("ARTIFACT_ROOT", ".gpt-artifacts").strip()
-    if not artifact_root_raw:
-        raise PlatformError(
-            "missing_artifact_root",
-            "ARTIFACT_ROOT 不能为空",
-            {"env": "ARTIFACT_ROOT"},
-        )
-    artifact_root = Path(artifact_root_raw).resolve()
     return GiteaConfig(
         base_url=base_url,
         token=token,
         timeout=timeout,
         verify_ssl=verify_ssl,
-        artifact_root=artifact_root,
     )

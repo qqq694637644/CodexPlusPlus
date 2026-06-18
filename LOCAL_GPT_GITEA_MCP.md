@@ -9,7 +9,7 @@
 - 查询 Gitea 版本和当前用户。
 - 查询仓库。
 - 查询 Actions workflow、run、job、job log。
-- 查询和下载 artifact。
+- 查询 artifact，并把 artifact 下载到 workspace 的 job 目录。
 - 查询仓库级 runner。
 
 不做：
@@ -39,7 +39,7 @@ codex mcp add localgpt-gitea --env GITEA_BASE_URL=https://gitea.example.com --en
 command = "python"
 args = ["-m", "localgpt_platform.mcp_server"]
 cwd = "D:\\repos\\CodexPlusPlus"
-env_vars = ["GITEA_BASE_URL", "GITEA_TOKEN", "ARTIFACT_ROOT"]
+env_vars = ["GITEA_BASE_URL", "GITEA_TOKEN"]
 tool_timeout_sec = 60
 ```
 
@@ -51,9 +51,15 @@ tool_timeout_sec = 60
 | `GITEA_TOKEN` | 大多数操作需要 | Gitea API token |
 | `GITEA_TIMEOUT` | 否 | 请求超时秒数，默认 `30` |
 | `GITEA_VERIFY_SSL` | 否 | 是否校验证书，默认 `true` |
-| `ARTIFACT_ROOT` | 否 | artifact 固定下载根目录，默认当前工作目录下 `.gpt-artifacts` |
 
-`actions.download_artifact` 不接受任意下载目录参数。所有 zip 和解压文件都必须落在 `ARTIFACT_ROOT` 内，路径越界会直接失败。
+`actions.get_job_log` 和 `actions.download_artifact` 需要传入当前 Codex workspace 的 `cwd` 参数，并固定写入：
+
+```text
+{cwd}/jobs/{job_id}/job.log
+{cwd}/jobs/{job_id}/artifact/
+```
+
+`actions.download_artifact` 不接受任意下载目录参数。所有 zip 和解压文件都必须落在 `{cwd}/jobs/{job_id}/artifact/` 内，路径越界会直接失败。
 
 ## MCP 工具
 
@@ -78,7 +84,11 @@ tool_timeout_sec = 60
 {
   "ok": true,
   "operation": "actions.get_job_log",
-  "data": {},
+  "data": {
+    "job_id": "123",
+    "log_path": "D:\\work\\repo\\jobs\\123\\job.log",
+    "content_returned": false
+  },
   "meta": {
     "repo": "owner/repo"
   },
@@ -86,7 +96,8 @@ tool_timeout_sec = 60
     "provider": "gitea",
     "method": "GET",
     "path": "/repos/owner/repo/actions/jobs/123/logs",
-    "status_code": 200
+    "status_code": 200,
+    "download_path": "D:\\work\\repo\\jobs\\123\\job.log"
   }
 }
 ```
@@ -126,4 +137,33 @@ python -m localgpt_platform execute --operation actions.list_runs --repo owner/r
 
 ```powershell
 python -m localgpt_platform execute --input-json request.json
+```
+
+下载 job log 示例：
+
+```json
+{
+  "operation": "actions.get_job_log",
+  "repo": "owner/repo",
+  "params": {
+    "cwd": "D:\\work\\repo",
+    "job_id": 456
+  }
+}
+```
+
+下载 artifact 示例：
+
+```json
+{
+  "operation": "actions.download_artifact",
+  "repo": "owner/repo",
+  "params": {
+    "cwd": "D:\\work\\repo",
+    "job_id": 456,
+    "artifact_id": 789,
+    "artifact_name": "test-results",
+    "extract": true
+  }
+}
 ```

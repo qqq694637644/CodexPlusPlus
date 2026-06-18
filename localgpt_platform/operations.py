@@ -93,11 +93,14 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         "example": {"operation": "actions.get_job", "repo": "owner/repo", "params": {"job_id": 456}},
     },
     "actions.get_job_log": {
-        "description": "读取单个 job 日志。",
+        "description": "下载单个 job 日志到 cwd/jobs/<job_id>/job.log，只返回文件路径和大小。",
         "repo_required": True,
-        "required_params": {"job_id": "integer/string，job id"},
+        "required_params": {
+            "cwd": "string，当前 Codex workspace 目录，作为所有 job 文件落盘根目录",
+            "job_id": "integer/string，job id",
+        },
         "optional_params": {},
-        "example": {"operation": "actions.get_job_log", "repo": "owner/repo", "params": {"job_id": 456}},
+        "example": {"operation": "actions.get_job_log", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456}},
     },
     "actions.list_artifacts": {
         "description": "列出仓库或 run 的 artifacts。",
@@ -111,18 +114,21 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         "example": {"operation": "actions.list_artifacts", "repo": "owner/repo", "params": {"run_id": 123}},
     },
     "actions.download_artifact": {
-        "description": "下载 artifact zip 到固定 ARTIFACT_ROOT，并可选解压。",
+        "description": "下载 artifact 到 cwd/jobs/<job_id>/artifact/，只返回目录路径和文件信息。",
         "repo_required": True,
-        "required_params": {"artifact_id": "integer/string，artifact id"},
+        "required_params": {
+            "cwd": "string，当前 Codex workspace 目录，作为所有 job 文件落盘根目录",
+            "job_id": "integer/string，job id，用于目录 cwd/jobs/<job_id>/artifact/",
+            "artifact_id": "integer/string，artifact id",
+        },
         "optional_params": {
-            "run_id": "integer/string，用于归档目录名；缺省为 unknown-run",
-            "artifact_name": "string，用于归档目录名；缺省为 artifact-<artifact_id>",
+            "artifact_name": "string，用于 zip 文件名；缺省为 artifact-<artifact_id>",
             "extract": "boolean，是否解压；默认 true",
         },
         "example": {
             "operation": "actions.download_artifact",
             "repo": "owner/repo",
-            "params": {"run_id": 123, "artifact_id": 789, "artifact_name": "test-results", "extract": True},
+            "params": {"cwd": "D:/work/project", "job_id": 456, "artifact_id": 789, "artifact_name": "test-results", "extract": True},
         },
     },
     "actions.list_runners": {
@@ -145,8 +151,9 @@ def describe_operations() -> dict[str, Any]:
         ],
         "repo_format": "owner/repo",
         "pagination": "支持 page 和 limit 参数时透传给 Gitea API。",
-        "artifact_root": "由 ARTIFACT_ROOT 环境变量配置；缺省为当前工作目录下的 .gpt-artifacts。",
-        "artifact_default_dir": "$ARTIFACT_ROOT/runs/<run_id>/<artifact_name>/",
+        "job_output_root": "需要由调用方传入 params.cwd；job log 和 artifact 都写入 cwd/jobs/<job_id>/。",
+        "artifact_default_dir": "<cwd>/jobs/<job_id>/artifact/",
+        "job_log_path": "<cwd>/jobs/<job_id>/job.log",
     }
 
 
@@ -263,13 +270,28 @@ async def get_job(client: GiteaClient, repo: str | None, params: dict[str, Any])
 async def get_job_log(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
     require_repo(repo)
     job_id = required_param(params, "job_id")
+    cwd = workspace_root(params)
+    job_dir = job_output_dir(cwd, job_id)
+    log_path = job_dir / "job.log"
+    assert_relative_to_root(log_path, cwd)
     log_text, evidence = await client.request_text(
         "GET",
         repo_path(repo, f"/actions/jobs/{path_segment(job_id)}/logs"),
     )
+    job_dir.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(log_text, encoding="utf-8")
+    evidence["download_path"] = str(log_path)
+    evidence["bytes"] = log_path.stat().st_size
     return ok_result(
         operation="actions.get_job_log",
-        data={"job_id": job_id, "log": log_text},
+        data={
+            "job_id": job_id,
+            "cwd": str(cwd),
+            "job_dir": str(job_dir),
+            "log_path": str(log_path),
+            "bytes": log_path.stat().st_size,
+            "content_returned": False,
+        },
         evidence=evidence,
         meta={"repo": repo},
     )
@@ -292,18 +314,19 @@ async def download_artifact(client: GiteaClient, repo: str | None, params: dict[
     if "target_dir" in params:
         raise PlatformError(
             "forbidden_param",
-            "actions.download_artifact 不允许传 target_dir；下载根目录只能由 ARTIFACT_ROOT 配置",
-            {"param": "target_dir", "artifact_root": str(client.config.artifact_root)},
+            "actions.download_artifact 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/artifact/",
+            {"param": "target_dir"},
         )
+    cwd = workspace_root(params)
+    job_id = required_param(params, "job_id")
     artifact_id = required_param(params, "artifact_id")
-    run_id = str(params.get("run_id") or "unknown-run")
     artifact_name = safe_name(str(params.get("artifact_name") or f"artifact-{artifact_id}"))
     extract = bool(params.get("extract", True))
-    target_root = artifact_root(client)
-    artifact_dir = target_root / "runs" / safe_name(run_id) / artifact_name
+    job_dir = job_output_dir(cwd, job_id)
+    artifact_dir = job_dir / "artifact"
     zip_path = artifact_dir / f"{artifact_name}.zip"
-    assert_relative_to_root(artifact_dir, target_root)
-    assert_relative_to_root(zip_path, target_root)
+    assert_relative_to_root(artifact_dir, cwd)
+    assert_relative_to_root(zip_path, cwd)
     evidence = await client.download(
         repo_path(repo, f"/actions/artifacts/{path_segment(artifact_id)}/zip"),
         zip_path,
@@ -317,9 +340,10 @@ async def download_artifact(client: GiteaClient, repo: str | None, params: dict[
         operation="actions.download_artifact",
         data={
             "artifact_id": artifact_id,
-            "run_id": run_id,
+            "job_id": job_id,
             "artifact_name": artifact_name,
-            "artifact_root": str(target_root),
+            "cwd": str(cwd),
+            "job_dir": str(job_dir),
             "zip_path": str(zip_path),
             "artifact_dir": str(artifact_dir),
             "extracted": extract,
@@ -364,14 +388,6 @@ def page_params(params: dict[str, Any]) -> dict[str, Any]:
     return filter_params(params, {"page", "limit"})
 
 
-def artifact_root(client: GiteaClient) -> Path:
-    root = client.config.artifact_root.resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    if not root.is_dir():
-        raise PlatformError("invalid_artifact_root", "ARTIFACT_ROOT 不是目录", {"artifact_root": str(root)})
-    return root
-
-
 def safe_name(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in value.strip())
     return cleaned.strip(".-") or "unnamed"
@@ -404,14 +420,30 @@ def extract_zip(zip_path: Path, target_dir: Path) -> list[str]:
     return extracted
 
 
+def workspace_root(params: dict[str, Any]) -> Path:
+    raw = required_param(params, "cwd")
+    root = Path(raw).resolve()
+    if not root.is_dir():
+        raise PlatformError(
+            "invalid_cwd",
+            "params.cwd 必须是已存在的目录",
+            {"cwd": raw, "resolved": str(root)},
+        )
+    return root
+
+
+def job_output_dir(cwd: Path, job_id: str) -> Path:
+    return cwd / "jobs" / safe_name(job_id)
+
+
 def assert_relative_to_root(path: Path, root: Path) -> None:
     try:
         path.resolve().relative_to(root.resolve())
     except ValueError as exc:
         raise PlatformError(
             "artifact_path_outside_root",
-            "artifact 目标路径不在 ARTIFACT_ROOT 内",
-            {"path": str(path), "artifact_root": str(root)},
+            "artifact 目标路径不在 params.cwd 内",
+            {"path": str(path), "cwd": str(root)},
         ) from exc
 
 
