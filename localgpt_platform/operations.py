@@ -188,6 +188,20 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         example={"operation": "actions.get_run", "repo": "owner/repo", "params": {"run_id": 123}},
         risk_level="low",
     ),
+    "ci.get_run_summary": operation_spec(
+        category="ci",
+        description="查询单个 run 和 jobs，返回紧凑摘要与 job 状态统计，不下载日志。",
+        repo_required=True,
+        read_only_remote=True,
+        writes_local_files=False,
+        writes_remote=False,
+        requires_cwd=False,
+        required_params={"run_id": "integer/string，workflow run id"},
+        optional_params={"attempt": "integer/string，指定 run attempt jobs", "page": "integer，jobs 页码，1 起始", "limit": "integer，jobs 每页数量"},
+        returns={"data": "run compact summary、jobs compact summary、job_count、failed_cancelled_timed_out_job_count、queued_in_progress_job_count、status_counts、conclusion_counts、content_returned=false。", "evidence": "GET run 和 GET jobs 调用证据。"},
+        example={"operation": "ci.get_run_summary", "repo": "owner/repo", "params": {"run_id": 123}},
+        risk_level="low",
+    ),
     "actions.list_run_jobs": operation_spec(
         category="ci",
         description="列出 run 的 jobs。",
@@ -498,6 +512,45 @@ async def get_run(client: GiteaClient, repo: str | None, params: dict[str, Any])
     data, evidence = await client.request_json("GET", path, step="actions.get_run")
     expect_object(data, step="actions.get_run", path=path)
     return ok_result(operation="actions.get_run", data=data, evidence=evidence, meta={"repo": repo})
+
+
+async def ci_get_run_summary(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
+    require_repo(repo)
+    run_id = required_param(params, "run_id")
+    evidence: list[dict[str, Any]] = []
+
+    run_path = repo_path(repo, f"/actions/runs/{path_segment(run_id)}")
+    run_data, run_evidence = await client.request_json("GET", run_path, step="ci.get_run_summary.get_run")
+    run_obj = expect_object(run_data, step="ci.get_run_summary.get_run", path=run_path)
+    evidence.append(run_evidence)
+
+    attempt = params.get("attempt")
+    suffix = f"/actions/runs/{path_segment(run_id)}/attempts/{path_segment(str(attempt))}/jobs" if attempt else f"/actions/runs/{path_segment(run_id)}/jobs"
+    jobs_path = repo_path(repo, suffix)
+    jobs_data, jobs_evidence = await client.request_json("GET", jobs_path, params=page_params(params), step="ci.get_run_summary.list_jobs")
+    jobs = expect_keyed_object_list(jobs_data, step="ci.get_run_summary.list_jobs", path=jobs_path, keys=("jobs", "workflow_jobs"))
+    jobs_evidence["result_count"] = len(jobs)
+    evidence.append(jobs_evidence)
+
+    failed_count = sum(1 for job in jobs if is_failed_job(job))
+    queued_in_progress_count = sum(1 for job in jobs if is_queued_or_in_progress_job(job))
+    data = {
+        "run": compact_run(run_obj),
+        "jobs": [compact_job(job) for job in jobs],
+        "job_count": len(jobs),
+        "failed_cancelled_timed_out_job_count": failed_count,
+        "queued_in_progress_job_count": queued_in_progress_count,
+        "status_counts": count_field_values(jobs, "status"),
+        "conclusion_counts": count_field_values(jobs, "conclusion"),
+        "content_returned": False,
+    }
+    return ok_result(
+        operation="ci.get_run_summary",
+        data=data,
+        evidence=evidence,
+        meta={"repo": repo, "run_id": run_id, "attempt": str(attempt) if attempt else None},
+        next_suggested_operations=["ci.prepare_failure_context"] if failed_count else [],
+    )
 
 
 async def list_run_jobs(client: GiteaClient, repo: str | None, params: dict[str, Any]) -> dict[str, Any]:
@@ -1035,6 +1088,23 @@ def is_failed_job(job: dict[str, Any]) -> bool:
     return conclusion in _FAILED_CONCLUSIONS or status in _FAILED_STATUSES
 
 
+def is_queued_or_in_progress_job(job: dict[str, Any]) -> bool:
+    status = str(job.get("status") or "").lower()
+    return status in {"queued", "in_progress"}
+
+
+def count_field_values(items: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = item.get(field)
+        if value is None or str(value).strip() == "":
+            key = "<missing>"
+        else:
+            key = str(value).lower()
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def is_failed_run(run: dict[str, Any]) -> bool:
     conclusion = str(run.get("conclusion") or "").lower()
     status = str(run.get("status") or "").lower()
@@ -1082,6 +1152,7 @@ HANDLERS: dict[str, OperationHandler] = {
     "actions.get_workflow": get_workflow,
     "actions.list_runs": list_runs,
     "actions.get_run": get_run,
+    "ci.get_run_summary": ci_get_run_summary,
     "actions.list_run_jobs": list_run_jobs,
     "actions.get_job": get_job,
     "actions.download_job_log": download_job_log,
