@@ -421,7 +421,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
     ),
     "workflow.dispatch_and_track": operation_spec(
         category="workflow",
-        description="触发 workflow_dispatch，并按 workflow/ref/created_after/actor 查询候选 runs。远端写操作。",
+        description="触发 workflow_dispatch，并用 repo-scoped runs 接口按 workflow/ref/created_after/actor 本地筛选候选 runs。远端写操作。",
         repo_required=True,
         read_only_remote=False,
         writes_local_files=False,
@@ -429,7 +429,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         requires_cwd=False,
         required_params={"workflow_id": "string/integer，workflow id 或文件名", "ref": "string，dispatch ref", "confirm": "boolean，必须是 JSON true"},
         optional_params={"inputs": "object[string,string]，workflow_dispatch inputs", "created_after": "string，ISO 时间，本地过滤候选 runs", "actor": "string，触发用户过滤", "candidate_limit": "integer，候选 run 数量；默认 10"},
-        returns={"data": "dispatch_run_details、workflow_run_id、candidate_runs、candidate_count、matched、match_status、content_returned=false。", "evidence": "dispatch 和候选 runs 查询证据。"},
+        returns={"data": "dispatch_run_details、workflow_run_id、candidate_runs、candidate_count、matched、match_status、content_returned=false。dispatch 成功但候选查询失败时 ok=true 并返回 warning。", "evidence": "dispatch 和候选 runs 查询证据。"},
         example={"operation": "workflow.dispatch_and_track", "repo": "owner/repo", "params": {"workflow_id": "ci.yml", "ref": "main", "confirm": True}},
         risk_level="high",
     ),
