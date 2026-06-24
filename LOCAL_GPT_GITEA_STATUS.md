@@ -228,7 +228,7 @@ workflow.dispatch_and_track
 
 - `workflow.rerun_job`：读取 job，校验 job 所属 `run_id`、`expected_status`、`expected_conclusion`，再调用 run-scoped job rerun endpoint。
 - `workflow.rerun_run`：读取 run，校验 `expected_head_sha`、可选 status/conclusion，再重跑 run。
-- `workflow.dispatch_and_track`：触发 workflow dispatch，再通过 repo-scoped `/actions/runs` 查询候选 runs 并本地筛 workflow/ref/created_after/actor；`inputs` 必须是 `object[string,string]`，非 string value 会在 MCP schema 层失败；候选 run 查询会把 `refs/heads/<branch>` 规范化为 `branch=<branch>`，tag/full ref 不传 branch，避免 Gitea branch query 被二次加前缀；dispatch 成功但候选查询失败时返回 `ok=true` 加 warning，不把已触发误报为失败。
+- `workflow.dispatch_and_track`：触发 workflow dispatch；若响应含 `workflow_run_id` 则直接返回确定匹配；否则通过 repo-scoped `/actions/runs` 查询候选 runs 并本地筛 workflow/ref/created_after/actor；`inputs` 必须是 `object[string,string]`，非 string value 会在 MCP schema 层失败；候选 run 查询会把 `refs/heads/<branch>` 规范化为 `branch=<branch>`，tag/full ref 不传 branch，避免 Gitea branch query 被二次加前缀；本地筛选兼容 Gitea run `path=workflow.yml@ref`、`started_at` 和 `trigger_actor`；dispatch 成功但候选查询失败时返回 `ok=true` 加 warning，不把已触发误报为失败。
 
 共同要求：
 

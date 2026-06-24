@@ -153,7 +153,7 @@ class FakeGiteaClient:
     def _workflow_dispatch(self, params: dict[str, Any], json_body: dict[str, Any]) -> Any:
         assert params == {"return_run_details": True}, params
         assert "return_run_details" not in json_body, json_body
-        if self.broken == "dispatch_no_run_id":
+        if self.broken in {"dispatch_no_run_id", "dispatch_tracking_404"}:
             return None
         if self.broken == "dispatch_wrong_shape":
             return {"run_id": 11}
@@ -189,7 +189,7 @@ class FakeGiteaClient:
         if self.broken == "runs":
             return {"broken_runs": []}
         if params.get("event") == "workflow_dispatch":
-            return {"workflow_runs": [{"id": 11, "status": "queued", "event": "workflow_dispatch", "head_branch": "main", "head_sha": "abc", "path": ".gitea/workflows/ci.yml", "created_at": "2026-01-01T00:00:00Z"}]}
+            return {"workflow_runs": [{"id": 11, "status": "queued", "event": "workflow_dispatch", "head_branch": "main", "head_sha": "abc", "path": "ci.yml@refs/heads/main", "started_at": "2026-01-01T00:00:01Z", "actor": {"login": "alice"}, "trigger_actor": {"login": "alice"}}]}
         if self.broken == "merge_ci_success":
             return {"workflow_runs": [{"id": 30, "status": "success", "conclusion": "success", "head_sha": "abc", "created_at": "2026-01-01T00:00:00Z"}]}
         if self.broken == "merge_ci_in_progress":
@@ -375,12 +375,14 @@ async def main() -> None:
     rerun_run = await workflow_rerun_run(client, "owner/repo", {"run_id": 10, "expected_head_sha": "abc", "expected_status": "failure", "confirm": True})
     assert rerun_run["ok"] is True
     assert rerun_run["data"]["rerun_response"] == {"rerun": "run"}
-    dispatch = await workflow_dispatch_and_track(client, "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
+    dispatch_client = FakeGiteaClient()
+    dispatch = await workflow_dispatch_and_track(dispatch_client, "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
     assert dispatch["ok"] is True
-    client.assert_called("POST", "/repos/owner/repo/actions/workflows/ci.yml/dispatches", params={"return_run_details": True}, json_body={"ref": "main"})
-    client.assert_called("GET", "/repos/owner/repo/actions/runs", params={"event": "workflow_dispatch", "branch": "main", "limit": 10})
-    client.assert_not_called("GET", "/repos/owner/repo/actions/workflows/ci.yml/runs")
+    dispatch_client.assert_called("POST", "/repos/owner/repo/actions/workflows/ci.yml/dispatches", params={"return_run_details": True}, json_body={"ref": "main"})
+    dispatch_client.assert_not_called("GET", "/repos/owner/repo/actions/runs")
+    dispatch_client.assert_not_called("GET", "/repos/owner/repo/actions/workflows/ci.yml/runs")
     assert dispatch["data"]["workflow_run_id"] == "11"
+    assert dispatch["data"]["candidate_count"] == 0
     assert dispatch["data"]["dispatch_run_details"]["workflow_run_id"] == "11"
     assert dispatch["data"]["matched"] is True
     assert dispatch["data"]["match_status"] == "dispatch_run_details"
@@ -397,26 +399,31 @@ async def main() -> None:
         params={"return_run_details": True},
         json_body={"ref": "main", "inputs": {"env": "prod", "debug": "true"}},
     )
-    dispatch_full_ref_client = FakeGiteaClient()
+    dispatch_full_ref_client = FakeGiteaClient(broken="dispatch_no_run_id")
     dispatch_full_ref = await workflow_dispatch_and_track(dispatch_full_ref_client, "owner/repo", {"workflow_id": "ci.yml", "ref": "refs/heads/main", "confirm": True})
     assert dispatch_full_ref["ok"] is True
+    assert dispatch_full_ref["data"]["workflow_run_id"] == "11"
     dispatch_full_ref_client.assert_called(
         "GET",
         "/repos/owner/repo/actions/runs",
         params={"event": "workflow_dispatch", "branch": "main", "limit": 10},
     )
-    dispatch_tag_ref_client = FakeGiteaClient()
+    dispatch_tag_ref_client = FakeGiteaClient(broken="dispatch_no_run_id")
     dispatch_tag_ref = await workflow_dispatch_and_track(dispatch_tag_ref_client, "owner/repo", {"workflow_id": "ci.yml", "ref": "refs/tags/v1.0.0", "confirm": True})
     assert dispatch_tag_ref["ok"] is True
+    assert dispatch_tag_ref["data"]["workflow_run_id"] == "11"
     dispatch_tag_ref_client.assert_called(
         "GET",
         "/repos/owner/repo/actions/runs",
         params={"event": "workflow_dispatch", "limit": 10},
     )
-    dispatch_no_run_id = await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_no_run_id"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
+    dispatch_no_run_id_client = FakeGiteaClient(broken="dispatch_no_run_id")
+    dispatch_no_run_id = await workflow_dispatch_and_track(dispatch_no_run_id_client, "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "actor": "alice", "created_after": "2026-01-01T00:00:00Z", "confirm": True})
     assert dispatch_no_run_id["ok"] is True
     assert dispatch_no_run_id["data"]["workflow_run_id"] == "11"
     assert dispatch_no_run_id["data"]["match_status"] == "candidate_runs", dispatch_no_run_id
+    assert dispatch_no_run_id["data"]["candidate_count"] == 1
+    dispatch_no_run_id_client.assert_called("GET", "/repos/owner/repo/actions/runs", params={"event": "workflow_dispatch", "branch": "main", "actor": "alice", "limit": 10})
     assert any(warning["code"] == "missing_dispatch_run_details" for warning in dispatch_no_run_id["warnings"]), dispatch_no_run_id
     dispatch_wrong_shape = await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_wrong_shape"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
     assert dispatch_wrong_shape["ok"] is True
@@ -425,8 +432,9 @@ async def main() -> None:
     assert any(warning["code"] == "missing_dispatch_workflow_run_id" for warning in dispatch_wrong_shape["warnings"]), dispatch_wrong_shape
     dispatch_tracking_404 = await workflow_dispatch_and_track(FakeGiteaClient(broken="dispatch_tracking_404"), "owner/repo", {"workflow_id": "ci.yml", "ref": "main", "confirm": True})
     assert dispatch_tracking_404["ok"] is True
-    assert dispatch_tracking_404["data"]["workflow_run_id"] == "11"
-    assert dispatch_tracking_404["data"]["match_status"] == "dispatch_run_details", dispatch_tracking_404
+    assert dispatch_tracking_404["data"]["workflow_run_id"] is None
+    assert dispatch_tracking_404["data"]["matched"] is False
+    assert dispatch_tracking_404["data"]["match_status"] == "tracking_failed", dispatch_tracking_404
     assert dispatch_tracking_404["data"]["candidate_count"] == 0
     assert any(warning["code"] == "candidate_run_tracking_failed" for warning in dispatch_tracking_404["warnings"]), dispatch_tracking_404
 

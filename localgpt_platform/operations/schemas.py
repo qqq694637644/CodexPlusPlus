@@ -135,13 +135,25 @@ def require_dispatch_run_details(data: Any, *, step: str, path: str) -> dict[str
 def run_matches_created_after(run: dict[str, Any], created_after: Any | None) -> bool:
     if created_after is None or str(created_after).strip() == "":
         return True
-    created = run.get("created_at")
+    created = run_timestamp_for_created_after(run)
     if created is None:
         return False
-    return str(created) >= str(created_after).strip()
+    return created >= str(created_after).strip()
+
+
+def run_timestamp_for_created_after(run: dict[str, Any]) -> str | None:
+    for key in ("created_at", "started_at", "run_started_at"):
+        value = run.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text or text.startswith("0001-01-01"):
+            continue
+        return text
+    return None
 
 def sort_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(runs, key=lambda run: (str(run.get("created_at") or ""), int(run.get("id") or 0)), reverse=True)
+    return sorted(runs, key=lambda run: (run_timestamp_for_created_after(run) or "", int(run.get("id") or 0)), reverse=True)
 
 def job_run_id(job: dict[str, Any]) -> Any:
     for key in ("run_id", "workflow_run_id"):

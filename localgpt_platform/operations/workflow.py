@@ -135,6 +135,16 @@ def _known_text_values(*values: Any) -> list[str]:
     return result
 
 
+def workflow_identity_parts(value: Any) -> tuple[str, str] | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace("\\", "/")
+    if not text:
+        return None
+    workflow_part = text.split("@", 1)[0]
+    return workflow_part, workflow_part.rsplit("/", 1)[-1]
+
+
 def run_matches_dispatch_workflow(run: dict[str, Any], workflow_id: str) -> bool:
     workflow = run.get("workflow")
     workflow_values = _known_text_values(
@@ -147,11 +157,15 @@ def run_matches_dispatch_workflow(run: dict[str, Any], workflow_id: str) -> bool
     if not workflow_values:
         return True
 
-    expected = str(workflow_id).strip().replace("\\", "/")
-    expected_basename = expected.rsplit("/", 1)[-1]
+    expected_parts = workflow_identity_parts(workflow_id)
+    if expected_parts is None:
+        return True
+    expected, expected_basename = expected_parts
     for value in workflow_values:
-        normalized = value.replace("\\", "/")
-        basename = normalized.rsplit("/", 1)[-1]
+        value_parts = workflow_identity_parts(value)
+        if value_parts is None:
+            continue
+        normalized, basename = value_parts
         if normalized == expected or basename == expected_basename or normalized.endswith(f"/{expected}"):
             return True
     return False
@@ -169,12 +183,12 @@ def run_matches_dispatch_actor(run: dict[str, Any], actor: Any | None) -> bool:
         return True
     expected = str(actor).strip()
     actor_obj = run.get("actor")
-    triggering_actor = run.get("triggering_actor")
+    trigger_actor = run.get("trigger_actor") or run.get("triggering_actor")
     values = _known_text_values(
         actor_obj,
-        triggering_actor,
+        trigger_actor,
         *(actor_obj.get(key) for key in ("login", "username", "name", "id") if isinstance(actor_obj, dict)),
-        *(triggering_actor.get(key) for key in ("login", "username", "name", "id") if isinstance(triggering_actor, dict)),
+        *(trigger_actor.get(key) for key in ("login", "username", "name", "id") if isinstance(trigger_actor, dict)),
     )
     return not values or expected in values
 
@@ -213,6 +227,25 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
     warnings.extend(dispatch_warnings)
     evidence.append(dispatch_evidence)
 
+    workflow_run_id = dispatch_run_details.get("workflow_run_id") if dispatch_run_details else None
+    if workflow_run_id:
+        return ok_result(
+            operation="workflow.dispatch_and_track",
+            data={
+                "dispatch_run_details": dispatch_run_details,
+                "workflow_run_id": workflow_run_id,
+                "candidate_count": 0,
+                "candidate_runs": [],
+                "matched": True,
+                "match_status": "dispatch_run_details",
+                "content_returned": False,
+            },
+            evidence=evidence,
+            warnings=warnings,
+            meta={"repo": repo, "workflow_id": workflow_id, "ref": ref},
+            next_suggested_operations=["ci.get_run_summary"],
+        )
+
     runs_path = repo_path(repo, "/actions/runs")
     candidate_limit = int_param(params, "candidate_limit", 10, minimum=1)
     run_params: dict[str, Any] = {"event": "workflow_dispatch", "limit": candidate_limit}
@@ -243,14 +276,11 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
             }
         )
 
-    workflow_run_id = dispatch_run_details.get("workflow_run_id") if dispatch_run_details else None
-    if not workflow_run_id and candidates:
+    if candidates:
         candidate_id = candidates[0].get("id") or candidates[0].get("run_id")
         workflow_run_id = str(candidate_id) if candidate_id is not None and str(candidate_id).strip() else None
 
-    if dispatch_run_details and dispatch_run_details.get("workflow_run_id"):
-        match_status = "dispatch_run_details"
-    elif tracking_failed:
+    if tracking_failed:
         match_status = "tracking_failed"
     elif candidates:
         match_status = "candidate_runs"
