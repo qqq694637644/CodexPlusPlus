@@ -3,16 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from localgpt_platform.gitea import GiteaClient, repo_path
-from localgpt_platform.result import PlatformError, ok_result
+from localgpt_platform.result import ok_result
 
 from .schemas import (
-    branch_query_from_dispatch_ref,
     compact_job,
     compact_run,
     expect_object,
     expect_object_or_none,
-    expect_keyed_object_list,
-    int_param,
     path_segment,
     require_confirm,
     require_dispatch_run_details,
@@ -20,10 +17,7 @@ from .schemas import (
     require_job_run_id,
     require_repo,
     required_param,
-    run_matches_created_after,
-    sort_runs,
     string_map_param,
-    workflow_runs_path,
 )
 
 
@@ -99,28 +93,15 @@ async def workflow_dispatch_and_track(client: GiteaClient, repo: str | None, par
     )
     dispatch_run_details = require_dispatch_run_details(dispatch_data, step="workflow.dispatch_and_track.dispatch", path=dispatch_path)
     evidence.append(dispatch_evidence)
-
-    runs_path = workflow_runs_path(repo, workflow_id)
-    candidate_limit = int_param(params, "candidate_limit", 10, minimum=1)
-    run_params: dict[str, Any] = {"limit": candidate_limit}
-    branch = branch_query_from_dispatch_ref(ref)
-    if branch:
-        run_params["branch"] = branch
-    if params.get("actor"):
-        run_params["actor"] = params["actor"]
-    runs_data, runs_evidence = await client.request_json("GET", runs_path, params=run_params, step="workflow.dispatch_and_track.list_candidate_runs")
-    runs = expect_keyed_object_list(runs_data, step="workflow.dispatch_and_track.list_candidate_runs", path=runs_path, keys=("workflow_runs",))
-    candidates = [run for run in sort_runs(runs) if run_matches_created_after(run, params.get("created_after"))]
-    runs_evidence["result_count"] = len(candidates)
-    evidence.append(runs_evidence)
     workflow_run_id = dispatch_run_details["workflow_run_id"]
+
     return ok_result(
         operation="workflow.dispatch_and_track",
         data={
             "dispatch_run_details": dispatch_run_details,
             "workflow_run_id": workflow_run_id,
-            "candidate_count": len(candidates),
-            "candidate_runs": [compact_run(run) for run in candidates],
+            "candidate_count": 0,
+            "candidate_runs": [],
             "matched": True,
             "match_status": "dispatch_run_details",
             "content_returned": False,
