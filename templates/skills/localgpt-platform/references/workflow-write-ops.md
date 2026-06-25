@@ -1,31 +1,136 @@
-# Workflow remote write operations
+# Workflow 远端写操作
 
-Use this reference only when the user explicitly asks to trigger or rerun Gitea Actions workflows/jobs.
+只有当用户明确要求 trigger、dispatch 或 rerun Gitea Actions workflow/job 时，使用本参考。
 
-## Operations
+## 操作列表
 
 ```text
-workflow.rerun_job
-workflow.rerun_run
 workflow.dispatch_and_track
+workflow.rerun_run
+workflow.rerun_job
 ```
 
-## Rules
+## 通用规则
 
-- Inspect the full schema first with `gitea_describe_operations(operation=..., detail=full)`.
-- Pass JSON boolean `confirm=true`; strings like `"true"`, numbers like `1`, and other truthy values are rejected.
-- Pass required `expected_*` fields.
-- Do not hide rerun or dispatch inside read-only CI diagnosis flows.
-- Do not retry automatically after failure.
+- 调用前必须用 `gitea_describe_operations(operation=..., detail=full)` 查看 full schema。
+- 必须传 JSON boolean `confirm=true`；字符串 `"true"`、数字 `1` 或其它 truthy 值都不合法。
+- 必须传 schema 要求的 `expected_*` 参数。
+- 不要把 rerun 或 dispatch 隐藏在只读 CI 诊断流程里。
+- 不要在失败后自动重复远端写操作。
+- 如果远端写请求可能已经成功但后续跟踪失败，先用只读 operation 查询真实 Gitea 状态。
 
 ## `workflow.rerun_job`
 
-Reads the job first, verifies required `run_id` plus optional `expected_status` and `expected_conclusion`, then posts to the run-scoped job rerun endpoint.
+用途：重跑单个 job。
+
+流程：
+
+1. 读取 job。
+2. 校验 required `run_id`。
+3. 校验可选 `expected_status` 和 `expected_conclusion`。
+4. POST 到 run-scoped job rerun endpoint。
+
+示例：
+
+```json
+{
+  "operation": "workflow.rerun_job",
+  "repo": "owner/repo",
+  "params": {
+    "run_id": 123,
+    "job_id": 456,
+    "expected_status": "failure",
+    "confirm": true
+  }
+}
+```
 
 ## `workflow.rerun_run`
 
-Reads the run first, verifies required `expected_head_sha` and optional status/conclusion, then posts to the run rerun endpoint.
+用途：重跑整个 workflow run。
+
+流程：
+
+1. 读取 run。
+2. 校验 `expected_head_sha`。
+3. 校验可选 `expected_status` 和 `expected_conclusion`。
+4. POST 到 run rerun endpoint。
+
+示例：
+
+```json
+{
+  "operation": "workflow.rerun_run",
+  "repo": "owner/repo",
+  "params": {
+    "run_id": 123,
+    "expected_head_sha": "abc123",
+    "confirm": true
+  }
+}
+```
 
 ## `workflow.dispatch_and_track`
 
-Dispatches a workflow file such as `ci.yml` with query parameter `return_run_details=true`, then strictly requires the current Gitea `RunDetails.workflow_run_id` response field. No candidate run fallback is performed; once `workflow_run_id` is present, the operation returns that definite match and does not call `/actions/runs` or `/actions/workflows/{workflow_id}/runs`. Optional `inputs` must be `object[string,string]`; booleans, numbers, arrays, nested objects, and non-string keys are rejected before calling Gitea. A missing `workflow_run_id` is treated as an unexpected current-Gitea API response and returns an error.
+用途：触发 workflow_dispatch 并尝试匹配新 run。
+
+示例：
+
+```json
+{
+  "operation": "workflow.dispatch_and_track",
+  "repo": "owner/repo",
+  "params": {
+    "workflow_id": "ci.yml",
+    "ref": "main",
+    "inputs": {
+      "reason": "manual-test"
+    },
+    "confirm": true
+  }
+}
+```
+
+参数规则：
+
+- `workflow_id` 是 workflow id 或 workflow 文件名。
+- `ref` 是 dispatch ref。
+- `inputs` 必须是 `object[string,string]`。
+- `inputs` 中的 boolean、number、array、nested object、非 string key 都必须在调用前拒绝。
+- `refs/heads/<branch>` 会归一化为 `branch=<branch>`。
+- tag 或其它 full ref 不应强行当作 branch 查询。
+
+## Dispatch 跟踪兼容规则
+
+当前 provider 期望 dispatch 响应包含 Gitea `RunDetails.workflow_run_id`，并以它作为 definite match。
+
+但真实 Gitea 环境可能出现：
+
+```text
+dispatch 已成功创建 run
+后续 workflow-scoped runs tracking 失败或返回 404
+repo-scoped /actions/runs 能看到新 run
+```
+
+遇到这种情况：
+
+- 不要自动再次 dispatch；
+- 不要直接断言 workflow 没有触发；
+- 用只读 run 查询确认真实远端状态；
+- 查询 repo-scoped runs 时不要传 `workflow_id`；
+- 如果能看到新 run，应报告“dispatch 可能成功，但 provider tracking 不兼容”；
+- 后续应修 provider/parser，而不是让模型重复远端写操作。
+
+只读确认示例：
+
+```json
+{
+  "operation": "actions.list_runs",
+  "repo": "owner/repo",
+  "params": {
+    "branch": "main",
+    "event": "workflow_dispatch",
+    "limit": 10
+  }
+}
+```

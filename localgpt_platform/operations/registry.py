@@ -157,7 +157,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_local_files=False,
         writes_remote=False,
         requires_cwd=False,
-        required_params={"workflow_id": "string，workflow 文件名，例如 ci.yml"},
+        required_params={"workflow_id": "string/integer，workflow id 或 workflow 文件名"},
         optional_params={},
         returns={"data": "Gitea workflow JSON object。", "evidence": "GET workflow 调用证据。"},
         example={"operation": "actions.get_workflow", "repo": "owner/repo", "params": {"workflow_id": "ci.yml"}},
@@ -174,7 +174,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         required_params={},
         optional_params={
             "event": "string，workflow event name",
-            "workflow_id": "string，workflow 文件名；传入时查询指定 workflow 的 runs",
+            "workflow_id": "string/integer，传入时查询指定 workflow 的 runs",
             "branch": "string，workflow branch",
             "status": "string，pending/queued/in_progress/failure/success/skipped",
             "actor": "string，触发用户",
@@ -196,7 +196,7 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         requires_cwd=False,
         required_params={},
         optional_params={
-            "workflow_id": "string，workflow 文件名；传入时查询指定 workflow 的 runs",
+            "workflow_id": "string/integer，传入时查询指定 workflow 的 runs",
             "branch": "string，workflow branch",
             "head_sha": "string，触发 commit sha",
             "status": "string，pending/queued/in_progress/failure/success/skipped",
@@ -271,16 +271,16 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
     ),
     "actions.download_job_log": operation_spec(
         category="ci",
-        description="下载单个 job 日志到 cwd/jobs/<job_id>/job.log，只返回文件路径和大小。",
+        description="下载单个 job 日志到 THREAD_CWD/jobs/<job_id>/job.log，只返回文件路径和大小。",
         repo_required=True,
         read_only_remote=True,
         writes_local_files=True,
         writes_remote=False,
         requires_cwd=True,
-        required_params={"cwd": "string，当前 Codex workspace 目录，作为所有 job 文件落盘根目录", "job_id": "integer/string，job id"},
+        required_params={"cwd": "string，LocalGPT 线程工作根目录 THREAD_CWD，不是 Git 仓库根目录；作为 jobs/... 落盘根目录", "job_id": "integer/string，job id"},
         optional_params={},
         returns={"data": "job_id、job_dir、log_path、bytes、content_returned=false。", "evidence": "含 download_path 和 bytes 的 GET job logs 调用证据。"},
-        example={"operation": "actions.download_job_log", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456}},
+        example={"operation": "actions.download_job_log", "repo": "owner/repo", "params": {"cwd": "<THREAD_CWD>", "job_id": 456}},
         risk_level="medium",
     ),
     "actions.list_artifacts": operation_spec(
@@ -299,16 +299,16 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
     ),
     "actions.download_artifact": operation_spec(
         category="artifact",
-        description="下载 artifact 到 cwd/jobs/<job_id>/artifact/，只返回目录路径和文件信息。",
+        description="下载 artifact 到 THREAD_CWD/jobs/<job_id>/artifact/，只返回目录路径和文件信息。",
         repo_required=True,
         read_only_remote=True,
         writes_local_files=True,
         writes_remote=False,
         requires_cwd=True,
-        required_params={"cwd": "string，当前 Codex workspace 目录，作为所有 job 文件落盘根目录", "job_id": "integer/string，job id，用于目录 cwd/jobs/<job_id>/artifact/", "artifact_id": "integer/string，artifact id"},
+        required_params={"cwd": "string，LocalGPT 线程工作根目录 THREAD_CWD，不是 Git 仓库根目录；作为 jobs/... 落盘根目录", "job_id": "integer/string，job id，用于目录 THREAD_CWD/jobs/<job_id>/artifact/", "artifact_id": "integer/string，artifact id"},
         optional_params={"artifact_name": "string，用于解压子目录名；缺省为 artifact-<artifact_id>"},
         returns={"data": "artifact_id、artifact_dir、manifest_path、extracted_files、content_returned=false。", "evidence": "含临时 zip 下载路径、删除状态和 bytes 的 artifact 下载证据。"},
-        example={"operation": "actions.download_artifact", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "job_id": 456, "artifact_id": 789, "artifact_name": "test-results"}},
+        example={"operation": "actions.download_artifact", "repo": "owner/repo", "params": {"cwd": "<THREAD_CWD>", "job_id": 456, "artifact_id": 789, "artifact_name": "test-results"}},
         risk_level="medium",
     ),
     "actions.list_runners": operation_spec(
@@ -334,20 +334,20 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
         writes_remote=False,
         requires_cwd=False,
         required_params={},
-        optional_params={"branch": "string，过滤 queued/in_progress runs", "head_sha": "string，过滤 queued/in_progress runs", "workflow_id": "string，workflow 文件名；限制 workflow", "page": "integer，页码", "limit": "integer，每类 run 数量；默认 10", "disabled": "boolean，runner disabled 过滤"},
+        optional_params={"branch": "string，过滤 queued/in_progress runs", "head_sha": "string，过滤 queued/in_progress runs", "workflow_id": "string/integer，限制 workflow", "page": "integer，页码", "limit": "integer，每类 run 数量；默认 10", "disabled": "boolean，runner disabled 过滤"},
         returns={"data": "queued_runs、in_progress_runs、runner_summary、runners、content_returned=false。", "evidence": "queued/in_progress runs 和 runners 查询证据。"},
         example={"operation": "runner.diagnose_queue", "repo": "owner/repo", "params": {"limit": 10}},
         risk_level="low",
     ),
     "ci.prepare_failure_context": operation_spec(
         category="ci",
-        description="定位失败 run，列出失败 jobs，并把失败 job 日志下载到 cwd/jobs/<job_id>/job.log。",
+        description="定位失败 run，列出失败 jobs，并把失败 job 日志下载到 THREAD_CWD/jobs/<job_id>/job.log。",
         repo_required=True,
         read_only_remote=True,
         writes_local_files=True,
         writes_remote=False,
         requires_cwd=True,
-        required_params={"cwd": "string，当前 Codex workspace 目录"},
+        required_params={"cwd": "string，LocalGPT 线程工作根目录 THREAD_CWD，不是 Git 仓库根目录"},
         optional_params={
             "run_id": "integer/string，指定 workflow run",
             "branch": "string，按分支定位 run",
@@ -360,21 +360,21 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
             "limit": "integer，每页数量；定位 run 缺省 10",
         },
         returns={"data": "run summary、failed_jobs、log_paths、artifact_candidates、content_returned=false。", "evidence": "内部每次 Gitea API 调用证据列表。"},
-        example={"operation": "ci.prepare_failure_context", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "head_sha": "abc123", "status": "failure"}},
+        example={"operation": "ci.prepare_failure_context", "repo": "owner/repo", "params": {"cwd": "<THREAD_CWD>", "head_sha": "abc123", "status": "failure"}},
         risk_level="medium",
     ),
     "artifact.sync_for_run": operation_spec(
         category="artifact",
-        description="列出并下载某个 run 的 artifacts，解压到 cwd/jobs/run-<run_id>/artifact/ 并写 manifest.json。",
+        description="列出并下载某个 run 的 artifacts，解压到 THREAD_CWD/jobs/run-<run_id>/artifact/ 并写 manifest.json。",
         repo_required=True,
         read_only_remote=True,
         writes_local_files=True,
         writes_remote=False,
         requires_cwd=True,
-        required_params={"cwd": "string，当前 Codex workspace 目录", "run_id": "integer/string，workflow run id"},
+        required_params={"cwd": "string，LocalGPT 线程工作根目录 THREAD_CWD，不是 Git 仓库根目录", "run_id": "integer/string，workflow run id"},
         optional_params={"artifact_name_pattern": "string，fnmatch 风格 artifact 名称过滤", "job_id": "integer/string，可显式指定落盘 job 目录；缺省 run-<run_id>", "page": "integer，页码", "limit": "integer，每页数量"},
         returns={"data": "manifest_path、artifact_dir、artifact_dirs、file_count、content_returned=false。", "evidence": "list artifacts 和每个 artifact 下载证据。"},
-        example={"operation": "artifact.sync_for_run", "repo": "owner/repo", "params": {"cwd": "D:/work/project", "run_id": 123, "artifact_name_pattern": "test-*"}},
+        example={"operation": "artifact.sync_for_run", "repo": "owner/repo", "params": {"cwd": "<THREAD_CWD>", "run_id": 123, "artifact_name_pattern": "test-*"}},
         risk_level="medium",
     ),
     "pr.preflight": operation_spec(
@@ -421,15 +421,15 @@ OPERATION_SPECS: dict[str, dict[str, Any]] = {
     ),
     "workflow.dispatch_and_track": operation_spec(
         category="workflow",
-        description="触发 workflow_dispatch，并严格读取当前 Gitea RunDetails.workflow_run_id。远端写操作。",
+        description="触发 workflow_dispatch，并按 workflow/ref/created_after/actor 查询候选 runs。远端写操作。",
         repo_required=True,
         read_only_remote=False,
         writes_local_files=False,
         writes_remote=True,
         requires_cwd=False,
-        required_params={"workflow_id": "string，workflow 文件名，例如 ci.yml", "ref": "string，dispatch ref", "confirm": "boolean，必须是 JSON true"},
-        optional_params={"inputs": "object[string,string]，workflow_dispatch inputs"},
-        returns={"data": "dispatch_run_details、workflow_run_id、candidate_runs=[]、candidate_count=0、matched=true、match_status=dispatch_run_details、content_returned=false。缺少 workflow_run_id 时返回错误。", "evidence": "dispatch 调用证据。"},
+        required_params={"workflow_id": "string/integer，workflow id 或文件名", "ref": "string，dispatch ref", "confirm": "boolean，必须是 JSON true"},
+        optional_params={"inputs": "object[string,string]，workflow_dispatch inputs", "created_after": "string，ISO 时间，本地过滤候选 runs", "actor": "string，触发用户过滤", "candidate_limit": "integer，候选 run 数量；默认 10"},
+        returns={"data": "dispatch_run_details、workflow_run_id、candidate_runs、candidate_count、matched、match_status、content_returned=false。", "evidence": "dispatch 和候选 runs 查询证据。"},
         example={"operation": "workflow.dispatch_and_track", "repo": "owner/repo", "params": {"workflow_id": "ci.yml", "ref": "main", "confirm": True}},
         risk_level="high",
     ),
@@ -502,9 +502,9 @@ def describe_operations(*, category: str | None = None, operation: str | None = 
         "categories": categories,
         "repo_format": "owner/repo",
         "pagination": "支持 page 和 limit 参数时透传给 Gitea API。",
-        "job_output_root": "需要由调用方传入 params.cwd；job log 和 artifact 都写入 cwd/jobs/<job_id>/。",
-        "artifact_default_dir": "<cwd>/jobs/<job_id>/artifact/",
-        "job_log_path": "<cwd>/jobs/<job_id>/job.log",
+        "job_output_root": "需要由调用方传入 params.cwd；它必须是 LocalGPT 线程工作根目录 THREAD_CWD，不是 Git 仓库根目录。job log 和 artifact 都写入 THREAD_CWD/jobs/<job_id>/。",
+        "artifact_default_dir": "<THREAD_CWD>/jobs/<job_id>/artifact/",
+        "job_log_path": "<THREAD_CWD>/jobs/<job_id>/job.log",
     }
     if detail_value not in {"brief", "full"}:
         return {**base, "ok": False, "error": {"code": "invalid_detail", "message": "detail 必须是 brief 或 full", "details": {"detail": detail}}}
@@ -605,7 +605,7 @@ def validate_request(operation: str, repo: str | None, params: dict[str, Any]) -
     allowed_params = set(spec["required_params"]) | set(spec["optional_params"])
     unknown_params = sorted(set(params) - allowed_params)
     if spec["writes_local_files"] and "target_dir" in unknown_params:
-        return PlatformError("forbidden_param", "本地落盘 operation 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/。", {"param": "target_dir"})
+        return PlatformError("forbidden_param", "本地落盘 operation 不允许传 target_dir；请传 THREAD_CWD 作为 cwd，文件固定写入 THREAD_CWD/jobs/<job_id>/。", {"param": "target_dir"})
     if unknown_params:
         return PlatformError(
             "unknown_param",
@@ -614,7 +614,7 @@ def validate_request(operation: str, repo: str | None, params: dict[str, Any]) -
         )
 
     if spec["writes_local_files"] and "target_dir" in params:
-        return PlatformError("forbidden_param", "本地落盘 operation 不允许传 target_dir；请传 cwd，文件固定写入 cwd/jobs/<job_id>/。", {"param": "target_dir"})
+        return PlatformError("forbidden_param", "本地落盘 operation 不允许传 target_dir；请传 THREAD_CWD 作为 cwd，文件固定写入 THREAD_CWD/jobs/<job_id>/。", {"param": "target_dir"})
     for name in spec["required_params"]:
         value = params.get(name)
         if value is None or str(value).strip() == "":
